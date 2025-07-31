@@ -39,12 +39,12 @@ export default function Navbar() {
           >
             WALLET
           </Link>
-          <Link 
-            href="/swap" 
-            className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
-          >
-            SWAP
-          </Link>
+                           <Link
+                   href="/swap-typeform"
+                   className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
+                 >
+                   SWAP
+                 </Link>
           <Link 
             href="/about" 
             className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"

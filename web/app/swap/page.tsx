@@ -2,6 +2,7 @@
 
 import { useState } from 'react';
 import { Wallet } from '@stellar/typescript-wallet-sdk';
+import InterstellarButton from '../components/InterstellarButton';
 
 interface SwapForm {
   fromAsset: string;
@@ -48,20 +49,61 @@ export default function SwapPage() {
 
   return (
     <div className="min-h-screen bg-black relative overflow-hidden">
+      {/* Interstellar Background Elements */}
+      <div className="absolute inset-0">
+        {/* Wormhole Effect */}
+        <div className="absolute top-1/4 left-1/4 w-64 h-64 border border-white/10 rounded-full animate-pulse"></div>
+        <div className="absolute top-1/4 left-1/4 w-48 h-48 border border-white/20 rounded-full animate-pulse" style={{animationDelay: '1s'}}></div>
+        <div className="absolute top-1/4 left-1/4 w-32 h-32 border border-white/30 rounded-full animate-pulse" style={{animationDelay: '2s'}}></div>
+        
+        {/* Tesseract Grid Lines */}
+        <div className="absolute inset-0 opacity-5">
+          {[...Array(20)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute border-l border-white/20"
+              style={{
+                left: `${(i * 5)}%`,
+                height: '100%',
+                animationDelay: `${i * 0.1}s`
+              }}
+            />
+          ))}
+          {[...Array(20)].map((_, i) => (
+            <div
+              key={i}
+              className="absolute border-t border-white/20"
+              style={{
+                top: `${(i * 5)}%`,
+                width: '100%',
+                animationDelay: `${i * 0.1}s`
+              }}
+            />
+          ))}
+        </div>
+      </div>
+
       <div className="relative z-10 max-w-7xl mx-auto px-6 py-12">
         {/* Header */}
         <div className="text-center mb-16">
-          <h1 className="text-4xl font-bold text-white mb-4 font-mono tracking-wider">
-            SWAP
+          <h1 className="text-5xl font-bold text-white mb-4 font-mono tracking-wider">
+            INTERSTELLAR SWAP
           </h1>
           <p className="text-lg text-gray-400 font-mono">
-            Convert any asset to Stellar
+            Transcend dimensions, convert any asset to Stellar
           </p>
         </div>
 
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-12 items-start">
-          {/* Left: Swap Interface */}
-          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/10 max-w-md">
+        {/* Center: Swap Interface */}
+        <div className="flex justify-center mb-16">
+          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-8 border border-white/20 max-w-md shadow-2xl">
+            {/* Interstellar Quote */}
+            <div className="mb-6 p-4 border-l-2 border-white/30 bg-black/20">
+              <p className="text-white/80 font-mono text-sm italic">
+                "Love is the one thing we're capable of perceiving that transcends dimensions of time and space."
+              </p>
+              <p className="text-white/60 font-mono text-xs mt-2">- Interstellar</p>
+            </div>
             {/* From Asset */}
             <div className="mb-6">
               <label className="block text-white/60 text-sm font-mono mb-3 tracking-wide">FROM</label>
@@ -140,32 +182,15 @@ export default function SwapPage() {
             </div>
 
             {/* Swap Button */}
-            <button
+            <InterstellarButton
               onClick={handleSwap}
-              disabled={isLoading || !swapForm.fromAmount || !swapForm.toAmount}
-              className={`
-                w-full py-3 px-6 rounded-lg font-mono text-sm font-medium
-                border border-white/10 bg-white/5 backdrop-blur-sm
-                transition-all duration-300 ease-out
-                overflow-hidden
-                group
-                hover:bg-white/10 hover:border-white/20
-                ${isLoading || !swapForm.fromAmount || !swapForm.toAmount
-                  ? 'cursor-not-allowed opacity-50'
-                  : 'hover:scale-105'
-                }
-                text-white
-              `}
+              disabled={!swapForm.fromAmount || !swapForm.toAmount}
+              loading={isLoading}
+              loadingText="PROCESSING"
+              className="w-full"
             >
-              {isLoading ? (
-                <div className="flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                  PROCESSING
-                </div>
-              ) : (
-                'SWAP'
-              )}
-            </button>
+              SWAP
+            </InterstellarButton>
 
             {/* Status */}
             {swapStatus && (
@@ -174,68 +199,68 @@ export default function SwapPage() {
               </div>
             )}
           </div>
+        </div>
 
-          {/* Right: Swap Information */}
-          <div className="space-y-6">
-            <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/10">
-              <h3 className="text-white font-mono font-bold mb-4 tracking-wide">SWAP INFORMATION</h3>
-              <div className="space-y-4 text-sm">
-                <div className="flex justify-between">
-                  <span className="text-white/60 font-mono">Exchange Rate</span>
-                  <span className="text-white font-mono">1 USDC = 0.85 XLM</span>
+        {/* Bottom: Features */}
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/20 shadow-xl">
+            <h3 className="text-white font-mono font-bold mb-4 tracking-wide">MISSION PARAMETERS</h3>
+            <div className="space-y-4 text-sm">
+              <div className="flex justify-between">
+                <span className="text-white/60 font-mono">Exchange Rate</span>
+                <span className="text-white font-mono">1 USDC = 0.85 XLM</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60 font-mono">Network Fee</span>
+                <span className="text-white font-mono">0.00001 XLM</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60 font-mono">Processing Time</span>
+                <span className="text-white font-mono">~3-5 seconds</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-white/60 font-mono">Minimum Swap</span>
+                <span className="text-white font-mono">1 USDC</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/20 shadow-xl">
+            <h3 className="text-white font-mono font-bold mb-4 tracking-wide">STELLAR CAPABILITIES</h3>
+            <div className="space-y-3 text-sm">
+              <div className="flex items-start space-x-3">
+                <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
+                <div>
+                  <span className="text-white font-mono font-medium">Instant Settlement</span>
+                  <p className="text-white/60 font-mono text-xs mt-1">Transcend time with 3-5 second transactions</p>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 font-mono">Network Fee</span>
-                  <span className="text-white font-mono">0.00001 XLM</span>
+              </div>
+              <div className="flex items-start space-x-3">
+                <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
+                <div>
+                  <span className="text-white font-mono font-medium">Ultra Low Fees</span>
+                  <p className="text-white/60 font-mono text-xs mt-1">Fixed fee of 0.00001 XLM per transaction</p>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 font-mono">Processing Time</span>
-                  <span className="text-white font-mono">~3-5 seconds</span>
-                </div>
-                <div className="flex justify-between">
-                  <span className="text-white/60 font-mono">Minimum Swap</span>
-                  <span className="text-white font-mono">1 USDC</span>
+              </div>
+              <div className="flex items-start space-x-3">
+                <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
+                <div>
+                  <span className="text-white font-mono font-medium">Cross-Chain Support</span>
+                  <p className="text-white/60 font-mono text-xs mt-1">Navigate between blockchain dimensions</p>
                 </div>
               </div>
             </div>
+          </div>
 
-            <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/10">
-              <h3 className="text-white font-mono font-bold mb-4 tracking-wide">STELLAR BENEFITS</h3>
-              <div className="space-y-3 text-sm">
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
-                  <div>
-                    <span className="text-white font-mono font-medium">Instant Settlement</span>
-                    <p className="text-white/60 font-mono text-xs mt-1">Transactions complete in 3-5 seconds</p>
-                  </div>
+          <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/20 shadow-xl">
+            <h3 className="text-white font-mono font-bold mb-4 tracking-wide">SUPPORTED DIMENSIONS</h3>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {popularAssets.map(asset => (
+                <div key={asset.symbol} className="flex items-center space-x-2">
+                  <div className="w-2 h-2 bg-white/60 rounded-full"></div>
+                  <span className="text-white font-mono">{asset.symbol}</span>
                 </div>
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
-                  <div>
-                    <span className="text-white font-mono font-medium">Ultra Low Fees</span>
-                    <p className="text-white/60 font-mono text-xs mt-1">Fixed fee of 0.00001 XLM per transaction</p>
-                  </div>
-                </div>
-                <div className="flex items-start space-x-3">
-                  <div className="w-2 h-2 bg-white/60 rounded-full mt-2"></div>
-                  <div>
-                    <span className="text-white font-mono font-medium">Cross-Chain Support</span>
-                    <p className="text-white/60 font-mono text-xs mt-1">Swap from any blockchain to Stellar</p>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="bg-white/5 backdrop-blur-sm rounded-lg p-6 border border-white/10">
-              <h3 className="text-white font-mono font-bold mb-4 tracking-wide">SUPPORTED ASSETS</h3>
-              <div className="grid grid-cols-2 gap-3 text-sm">
-                {popularAssets.map(asset => (
-                  <div key={asset.symbol} className="flex items-center space-x-2">
-                    <div className="w-2 h-2 bg-white/60 rounded-full"></div>
-                    <span className="text-white font-mono">{asset.symbol}</span>
-                  </div>
-                ))}
-              </div>
+              ))}
             </div>
           </div>
         </div>
