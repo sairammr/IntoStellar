@@ -477,27 +477,40 @@ impl FusionPlusEscrow {
     }
 
     fn is_native_token(_token: &Address) -> bool {
-        // In Soroban, native XLM is typically represented by a specific address
-        // This is a placeholder - in practice you'd check against the actual native token address
-        false // For now, assume all tokens go through token contracts
+        // In Soroban, native XLM is represented by the Stellar Asset Contract (SAC)
+        // The native XLM token contract has a deterministic address
+        // For now, we'll use a simple check - in production, you'd compare against the actual native XLM SAC address
+        // The native XLM SAC address is: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
+        
+        // Placeholder: Check if token represents native XLM
+        // In practice, you'd store the native XLM contract address and compare:
+        // *token == Address::from_string("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA")
+        false // For safety, assume all tokens are token contracts for now
     }
 
     fn transfer_tokens(env: &Env, immutables: &Immutables, to: &Address) -> Result<(), Error> {
-        if Self::is_native_token(&immutables.token) {
-            // Handle native XLM transfer
-            Self::transfer_native(env, to, immutables.amount)
-        } else {
-            // Handle token contract transfer
-            let token_client = token::Client::new(env, &immutables.token);
-            token_client.transfer(&env.current_contract_address(), to, &immutables.amount);
-            Ok(())
-        }
+        // In Soroban, ALL token transfers (including native XLM) use the same token::Client interface
+        // Native XLM is handled through its Stellar Asset Contract (SAC)
+        let token_client = token::Client::new(env, &immutables.token);
+        
+        // This works for both native XLM and custom tokens since native XLM has its own SAC
+        token_client.transfer(&env.current_contract_address(), to, &immutables.amount);
+        
+        Ok(())
     }
 
     fn transfer_native(_env: &Env, _to: &Address, _amount: i128) -> Result<(), Error> {
-        // Native XLM transfer implementation
-        // In production, this would use the proper Stellar native token handling
-        // For now, this is a placeholder
+        // In Soroban, native XLM transfers also use token::Client
+        // The native XLM has its own Stellar Asset Contract (SAC) address
+        // This function is kept for API compatibility but uses the same pattern
+        
+        // For native XLM, we would need the native XLM SAC address
+        // In a real implementation, this would be:
+        // let native_xlm_address = Address::from_string("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA");
+        // let token_client = token::Client::new(env, &native_xlm_address);
+        // token_client.transfer(&env.current_contract_address(), to, &amount);
+        
+        // For now, this is a placeholder that assumes the caller will use transfer_tokens
         Ok(())
     }
 
