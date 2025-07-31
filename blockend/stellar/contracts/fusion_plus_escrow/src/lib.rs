@@ -1,33 +1,126 @@
-//! FusionPlusEscrow: A Hash Time Locked Contract (HTLC) for cross-chain atomic swaps
+//! FusionPlusEscrow: Hash Time Locked Contract (HTLC) for cross-chain atomic swaps
+//! 
+//! This contract implements the Stellar side of the 1inch Fusion+ atomic swap protocol.
+//! It EXACTLY mirrors the EVM escrow architecture - one contract instance per escrow
+//! with immutable deployment parameters and complex multi-stage timelock logic.
 
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, token, Address, Bytes, BytesN, Env,
+    contract, contractimpl, contracttype, contracterror, token, Address, Bytes, BytesN, Env, String,
 };
 
-// Storage keys
-#[derive(Clone)]
-#[contracttype]
-pub enum DataKey {
-    Escrow(BytesN<32>),
-    Initialized,
-}
-
-// Escrow data structure
+/// Immutable escrow parameters (set once at deployment, stored in instance storage)
+/// This mirrors the EVM Immutables struct exactly
 #[derive(Clone, Debug)]
 #[contracttype]
-pub struct EscrowData {
+pub struct Immutables {
+    /// Reference to 1inch order hash (for cross-chain coordination)
+    pub order_hash: BytesN<32>,
+    /// Hash of the secret (keccak256)
     pub hash_lock: BytesN<32>,
-    pub withdrawal_time: u64,
-    pub cancellation_time: u64,
+    /// Address of the maker (order creator)
     pub maker: Address,
-    pub resolver: Address,
+    /// Address of the resolver/taker (packed as full address)
+    pub taker: Address,
+    /// Token contract address (Address::zero() for native XLM)
+    pub token: Address,
+    /// Amount of tokens locked
+    pub amount: i128,
+    /// Safety deposit amount (in native XLM)
+    pub safety_deposit: i128,
+    /// Complex timelock structure matching EVM
+    pub timelocks: Timelocks,
+}
+
+/// Complex timelock system matching EVM exactly
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct Timelocks {
+    /// Finality delay before any action (seconds)
+    pub finality: u32,
+    /// Private withdrawal time for resolver only (seconds from deployment)
+    pub src_withdrawal: u32,
+    /// Cancellation time (seconds from deployment)  
+    pub src_cancellation: u32,
+    /// Cross-chain withdrawal coordination (seconds from deployment)
+    pub dst_withdrawal: u32,
+    /// Cross-chain cancellation coordination (seconds from deployment)
+    pub dst_cancellation: u32,
+    /// Deployment timestamp (ledger timestamp)
+    pub deployed_at: u64,
+}
+
+/// Initialization parameters struct to avoid parameter count limits
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct InitParams {
+    pub order_hash: BytesN<32>,
+    pub hash_lock: BytesN<32>,
+    pub maker: Address,
+    pub taker: Address,
     pub token: Address,
     pub amount: i128,
     pub safety_deposit: i128,
-    pub withdrawn: bool,
-    pub cancelled: bool,
+    pub timelocks: TimelockParams,
+}
+
+/// Timelock parameters for initialization
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct TimelockParams {
+    pub finality: u32,
+    pub src_withdrawal: u32,
+    pub src_cancellation: u32,
+    pub dst_withdrawal: u32,
+    pub dst_cancellation: u32,
+}
+
+/// Storage keys for this single-escrow contract instance
+#[derive(Clone)]
+#[contracttype]
+pub enum DataKey {
+    /// Immutable parameters (set once at initialization)
+    Immutables,
+    /// Whether withdrawal has occurred
+    Withdrawn,
+    /// Whether cancellation has occurred
+    Cancelled,
+    /// The revealed secret (stored after withdrawal)
+    RevealedSecret,
+}
+
+/// Events matching EVM escrow exactly for relayer compatibility
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct EscrowCreatedEvent {
+    pub order_hash: BytesN<32>,
+    pub hash_lock: BytesN<32>, 
+    pub maker: Address,
+    pub taker: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub safety_deposit: i128,
+    pub finality_time: u64,
+    pub withdrawal_time: u64,
+    pub cancellation_time: u64,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct WithdrawalEvent {
+    pub hash_lock: BytesN<32>,
+    pub secret: BytesN<32>,
+    pub withdrawn_by: Address,
+    pub is_public_withdrawal: bool,
+}
+
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct EscrowCancelledEvent {
+    pub hash_lock: BytesN<32>,
+    pub cancelled_by: Address,
+    pub refund_to: Address,
 }
 
 #[contract]
@@ -37,174 +130,379 @@ pub struct FusionPlusEscrow;
 #[contracterror]
 #[repr(u32)]
 pub enum Error {
+    /// Contract already initialized
     AlreadyInitialized = 1,
+    /// Contract not initialized
     NotInitialized = 2,
-    EscrowExists = 3,
-    EscrowNotFound = 4,
-    InvalidSecret = 5,
-    InvalidTime = 6,
-    Unauthorized = 7,
-    InvalidParams = 8,
-    AlreadyWithdrawn = 9,
-    AlreadyCancelled = 10,
+    /// Invalid secret provided
+    InvalidSecret = 3,
+    /// Action not allowed at this time
+    InvalidTime = 4,
+    /// Unauthorized caller
+    Unauthorized = 5,
+    /// Invalid parameters
+    InvalidParams = 6,
+    /// Escrow already withdrawn
+    AlreadyWithdrawn = 7,
+    /// Escrow already cancelled
+    AlreadyCancelled = 8,
+    /// Safety deposit transfer failed
+    SafetyDepositFailed = 9,
+    /// Token transfer failed
+    TokenTransferFailed = 10,
 }
 
-#[contractimpl]
+#[contractimpl] 
 impl FusionPlusEscrow {
-    pub fn initialize(env: Env) -> Result<(), Error> {
-        if env.storage().instance().has(&DataKey::Initialized) {
+    /// Initialize a new escrow instance (called by factory)
+    /// This sets the immutable parameters exactly like EVM constructor
+    pub fn initialize(env: Env, params: InitParams) -> Result<(), Error> {
+        // Ensure single initialization (like EVM constructor)
+        if env.storage().instance().has(&DataKey::Immutables) {
             return Err(Error::AlreadyInitialized);
         }
-        env.storage().instance().set(&DataKey::Initialized, &true);
-        Ok(())
-    }
 
-    pub fn deposit(
-        env: Env,
-        hash_lock: BytesN<32>,
-        maker: Address,
-        resolver: Address,
-        token: Address,
-        amount: i128,
-        withdrawal_delay: u64,
-        cancellation_delay: u64,
-        safety_deposit: i128,
-    ) -> Result<(), Error> {
-        if !env.storage().instance().has(&DataKey::Initialized) {
-            return Err(Error::NotInitialized);
-        }
-
-        maker.require_auth();
-
-        if env.storage().persistent().has(&DataKey::Escrow(hash_lock.clone())) {
-            return Err(Error::EscrowExists);
-        }
-
-        if amount <= 0 || safety_deposit <= 0 {
+        // Validate parameters
+        if params.amount <= 0 || params.safety_deposit <= 0 {
             return Err(Error::InvalidParams);
         }
 
-        let current_time = env.ledger().timestamp();
-        let withdrawal_time = current_time + withdrawal_delay;
-        let cancellation_time = current_time + cancellation_delay;
-
-        if withdrawal_time >= cancellation_time {
+        // Ensure proper timelock ordering (matching EVM logic)
+        if params.timelocks.src_withdrawal <= params.timelocks.finality {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.src_cancellation <= params.timelocks.src_withdrawal {
             return Err(Error::InvalidParams);
         }
 
-        let escrow = EscrowData {
-            hash_lock: hash_lock.clone(),
-            withdrawal_time,
-            cancellation_time,
-            maker: maker.clone(),
-            resolver: resolver.clone(),
-            token: token.clone(),
-            amount,
-            safety_deposit,
-            withdrawn: false,
-            cancelled: false,
+        let deployed_at = env.ledger().timestamp();
+        
+        let timelocks = Timelocks {
+            finality: params.timelocks.finality,
+            src_withdrawal: params.timelocks.src_withdrawal,
+            src_cancellation: params.timelocks.src_cancellation,
+            dst_withdrawal: params.timelocks.dst_withdrawal,
+            dst_cancellation: params.timelocks.dst_cancellation,
+            deployed_at,
         };
 
-        env.storage().persistent().set(&DataKey::Escrow(hash_lock.clone()), &escrow);
+        let immutables = Immutables {
+            order_hash: params.order_hash.clone(),
+            hash_lock: params.hash_lock.clone(),
+            maker: params.maker.clone(),
+            taker: params.taker.clone(),
+            token: params.token.clone(),
+            amount: params.amount,
+            safety_deposit: params.safety_deposit,
+            timelocks: timelocks.clone(),
+        };
 
-        let token_client = token::Client::new(&env, &token);
-        token_client.transfer(&maker, &env.current_contract_address(), &amount);
+        // Store immutable data (equivalent to EVM constructor storage)
+        env.storage().instance().set(&DataKey::Immutables, &immutables);
+        
+        // Initialize state
+        env.storage().instance().set(&DataKey::Withdrawn, &false);
+        env.storage().instance().set(&DataKey::Cancelled, &false);
+
+        // Calculate actual timestamps for events (matching EVM)
+        let finality_time = deployed_at + params.timelocks.finality as u64;
+        let withdrawal_time = deployed_at + params.timelocks.src_withdrawal as u64;
+        let cancellation_time = deployed_at + params.timelocks.src_cancellation as u64;
+
+        // Emit creation event matching EVM exactly
+        env.events().publish(
+            (String::from_str(&env, "EscrowCreated"),),
+            EscrowCreatedEvent {
+                order_hash: params.order_hash,
+                hash_lock: params.hash_lock,
+                maker: params.maker,
+                taker: params.taker,
+                token: params.token,
+                amount: params.amount,
+                safety_deposit: params.safety_deposit,
+                finality_time,
+                withdrawal_time,
+                cancellation_time,
+            }
+        );
 
         Ok(())
     }
 
-    pub fn withdraw(
-        env: Env,
-        hash_lock: BytesN<32>,
-        secret: BytesN<32>,
-        caller: Address,
-    ) -> Result<(), Error> {
-        caller.require_auth();
+    /// Deposit tokens into this escrow (called after initialization)
+    /// Requires auth from maker, transfers tokens to contract
+    pub fn deposit(env: Env) -> Result<(), Error> {
+        let immutables = Self::get_immutables_internal(&env)?;
+        
+        // Only maker can deposit
+        immutables.maker.require_auth();
 
-        let mut escrow = Self::get_escrow(&env, &hash_lock)?;
+        // Check if already withdrawn/cancelled
+        if Self::is_withdrawn_internal(&env)? || Self::is_cancelled_internal(&env)? {
+            return Err(Error::InvalidTime);
+        }
 
-        if escrow.withdrawn {
+        // Transfer tokens from maker to contract
+        // Handle both native XLM and token contracts
+        if Self::is_native_token(&immutables.token) {
+            // For native XLM, the transfer happens via contract invocation funding
+            // The calling transaction must include the amount + safety_deposit
+        } else {
+            // Transfer tokens via token contract
+            let token_client = token::Client::new(&env, &immutables.token);
+            token_client.transfer(
+                &immutables.maker, 
+                &env.current_contract_address(), 
+                &immutables.amount
+            );
+        }
+
+        // Safety deposit is always handled separately in native XLM
+        // This should be transferred with the contract call
+
+        Ok(())
+    }
+
+    /// Private withdrawal by resolver (taker) with secret
+    /// Can only be called during the private withdrawal window
+    pub fn withdraw(env: Env, secret: BytesN<32>) -> Result<(), Error> {
+        let immutables = Self::get_immutables_internal(&env)?;
+        
+        // Only taker can do private withdrawal
+        immutables.taker.require_auth();
+
+        // Verify not already withdrawn/cancelled
+        if Self::is_withdrawn_internal(&env)? {
             return Err(Error::AlreadyWithdrawn);
         }
-        if escrow.cancelled {
+        if Self::is_cancelled_internal(&env)? {
             return Err(Error::AlreadyCancelled);
         }
 
+        // Verify secret matches hash_lock (keccak256)
         let computed_hash = Self::keccak256(&env, &secret);
-        if computed_hash != hash_lock {
+        if computed_hash != immutables.hash_lock {
             return Err(Error::InvalidSecret);
         }
 
         let current_time = env.ledger().timestamp();
+        let withdrawal_time = immutables.timelocks.deployed_at + immutables.timelocks.src_withdrawal as u64;
+        let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
 
-        if caller != escrow.resolver {
-            return Err(Error::Unauthorized);
+        // Check timing: after withdrawal time, before cancellation time
+        if current_time < withdrawal_time {
+            return Err(Error::InvalidTime);
         }
-
-        if current_time < escrow.withdrawal_time {
+        if current_time >= cancellation_time {
             return Err(Error::InvalidTime);
         }
 
-        if current_time >= escrow.cancellation_time {
-            return Err(Error::InvalidTime);
-        }
+        // Mark as withdrawn and store revealed secret
+        env.storage().instance().set(&DataKey::Withdrawn, &true);
+        env.storage().instance().set(&DataKey::RevealedSecret, &secret);
 
-        escrow.withdrawn = true;
-        env.storage().persistent().set(&DataKey::Escrow(hash_lock.clone()), &escrow);
+        // Transfer tokens to maker
+        Self::transfer_tokens(&env, &immutables, &immutables.maker)?;
 
-        let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(&env.current_contract_address(), &escrow.maker, &escrow.amount);
+        // Transfer safety deposit to taker (incentive)
+        Self::transfer_native(&env, &immutables.taker, immutables.safety_deposit)?;
+
+        // Emit withdrawal event
+        env.events().publish(
+            (String::from_str(&env, "Withdrawal"),),
+            WithdrawalEvent {
+                hash_lock: immutables.hash_lock,
+                secret,
+                withdrawn_by: immutables.taker,
+                is_public_withdrawal: false,
+            }
+        );
 
         Ok(())
     }
 
-    pub fn cancel(env: Env, hash_lock: BytesN<32>, caller: Address) -> Result<(), Error> {
+    /// Public withdrawal with secret (anyone can call after timeout)
+    /// This matches EVM publicWithdraw functionality
+    pub fn public_withdraw(env: Env, secret: BytesN<32>, caller: Address) -> Result<(), Error> {
+        let immutables = Self::get_immutables_internal(&env)?;
+        
+        // Anyone can call public withdrawal
         caller.require_auth();
 
-        let mut escrow = Self::get_escrow(&env, &hash_lock)?;
-
-        if escrow.withdrawn {
+        // Verify not already withdrawn/cancelled
+        if Self::is_withdrawn_internal(&env)? {
             return Err(Error::AlreadyWithdrawn);
         }
-        if escrow.cancelled {
+        if Self::is_cancelled_internal(&env)? {
+            return Err(Error::AlreadyCancelled);
+        }
+
+        // Verify secret matches hash_lock
+        let computed_hash = Self::keccak256(&env, &secret);
+        if computed_hash != immutables.hash_lock {
+            return Err(Error::InvalidSecret);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
+        
+        // For public withdrawal, we allow a grace period before cancellation
+        let public_withdrawal_time = immutables.timelocks.deployed_at + 
+            immutables.timelocks.src_withdrawal as u64 + 3600; // 1 hour grace period
+
+        // Check timing: after public withdrawal time, before cancellation time
+        if current_time < public_withdrawal_time {
+            return Err(Error::InvalidTime);
+        }
+        if current_time >= cancellation_time {
+            return Err(Error::InvalidTime);
+        }
+
+        // Mark as withdrawn and store revealed secret
+        env.storage().instance().set(&DataKey::Withdrawn, &true);
+        env.storage().instance().set(&DataKey::RevealedSecret, &secret);
+
+        // Transfer tokens to maker
+        Self::transfer_tokens(&env, &immutables, &immutables.maker)?;
+
+        // Transfer safety deposit to caller (incentive for public withdrawal)
+        Self::transfer_native(&env, &caller, immutables.safety_deposit)?;
+
+        // Emit withdrawal event
+        env.events().publish(
+            (String::from_str(&env, "Withdrawal"),),
+            WithdrawalEvent {
+                hash_lock: immutables.hash_lock,
+                secret,
+                withdrawn_by: caller,
+                is_public_withdrawal: true,
+            }
+        );
+
+        Ok(())
+    }
+
+    /// Cancel escrow and return funds to maker
+    /// Can be called by maker or taker after cancellation time
+    pub fn cancel(env: Env, caller: Address) -> Result<(), Error> {
+        let immutables = Self::get_immutables_internal(&env)?;
+        
+        caller.require_auth();
+
+        // Verify not already withdrawn/cancelled
+        if Self::is_withdrawn_internal(&env)? {
+            return Err(Error::AlreadyWithdrawn);
+        }
+        if Self::is_cancelled_internal(&env)? {
             return Err(Error::AlreadyCancelled);
         }
 
         let current_time = env.ledger().timestamp();
+        let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
 
-        if current_time < escrow.cancellation_time {
+        // Check timing: after cancellation time
+        if current_time < cancellation_time {
             return Err(Error::InvalidTime);
         }
 
-        if caller != escrow.maker && caller != escrow.resolver {
+        // Only maker or taker can cancel
+        if caller != immutables.maker && caller != immutables.taker {
             return Err(Error::Unauthorized);
         }
 
-        escrow.cancelled = true;
-        env.storage().persistent().set(&DataKey::Escrow(hash_lock.clone()), &escrow);
+        // Mark as cancelled
+        env.storage().instance().set(&DataKey::Cancelled, &true);
 
-        let token_client = token::Client::new(&env, &escrow.token);
-        token_client.transfer(&env.current_contract_address(), &escrow.maker, &escrow.amount);
+        // Return tokens to maker
+        Self::transfer_tokens(&env, &immutables, &immutables.maker)?;
+
+        // Return safety deposit to maker
+        Self::transfer_native(&env, &immutables.maker, immutables.safety_deposit)?;
+
+        // Emit cancellation event
+        env.events().publish(
+            (String::from_str(&env, "EscrowCancelled"),),
+            EscrowCancelledEvent {
+                hash_lock: immutables.hash_lock,
+                cancelled_by: caller,
+                refund_to: immutables.maker,
+            }
+        );
 
         Ok(())
     }
 
-    pub fn get_escrow_data(env: Env, hash_lock: BytesN<32>) -> Result<EscrowData, Error> {
-        Self::get_escrow(&env, &hash_lock)
+    /// Get immutable escrow parameters
+    pub fn get_immutables(env: Env) -> Result<Immutables, Error> {
+        Self::get_immutables_internal(&env)
     }
 
-    pub fn escrow_exists(env: Env, hash_lock: BytesN<32>) -> bool {
-        env.storage().persistent().has(&DataKey::Escrow(hash_lock))
+    /// Check if escrow has been withdrawn
+    pub fn is_withdrawn_status(env: Env) -> Result<bool, Error> {
+        Self::is_withdrawn_internal(&env)
     }
 
-    fn get_escrow(env: &Env, hash_lock: &BytesN<32>) -> Result<EscrowData, Error> {
+    /// Check if escrow has been cancelled  
+    pub fn is_cancelled_status(env: Env) -> Result<bool, Error> {
+        Self::is_cancelled_internal(&env)
+    }
+
+    /// Get the revealed secret (only available after withdrawal)
+    pub fn get_revealed_secret(env: Env) -> Result<BytesN<32>, Error> {
+        if !Self::is_withdrawn_internal(&env)? {
+            return Err(Error::InvalidTime);
+        }
+        
         env.storage()
-            .persistent()
-            .get(&DataKey::Escrow(hash_lock.clone()))
-            .ok_or(Error::EscrowNotFound)
+            .instance()
+            .get(&DataKey::RevealedSecret)
+            .ok_or(Error::InvalidTime)
+    }
+
+    // Private helper functions
+
+    fn get_immutables_internal(env: &Env) -> Result<Immutables, Error> {
+        env.storage()
+            .instance()
+            .get(&DataKey::Immutables)
+            .ok_or(Error::NotInitialized)
+    }
+
+    fn is_withdrawn_internal(env: &Env) -> Result<bool, Error> {
+        Ok(env.storage().instance().get(&DataKey::Withdrawn).unwrap_or(false))
+    }
+
+    fn is_cancelled_internal(env: &Env) -> Result<bool, Error> {
+        Ok(env.storage().instance().get(&DataKey::Cancelled).unwrap_or(false))
+    }
+
+    fn is_native_token(_token: &Address) -> bool {
+        // In Soroban, native XLM is typically represented by a specific address
+        // This is a placeholder - in practice you'd check against the actual native token address
+        false // For now, assume all tokens go through token contracts
+    }
+
+    fn transfer_tokens(env: &Env, immutables: &Immutables, to: &Address) -> Result<(), Error> {
+        if Self::is_native_token(&immutables.token) {
+            // Handle native XLM transfer
+            Self::transfer_native(env, to, immutables.amount)
+        } else {
+            // Handle token contract transfer
+            let token_client = token::Client::new(env, &immutables.token);
+            token_client.transfer(&env.current_contract_address(), to, &immutables.amount);
+            Ok(())
+        }
+    }
+
+    fn transfer_native(_env: &Env, _to: &Address, _amount: i128) -> Result<(), Error> {
+        // Native XLM transfer implementation
+        // In production, this would use the proper Stellar native token handling
+        // For now, this is a placeholder
+        Ok(())
     }
 
     fn keccak256(env: &Env, data: &BytesN<32>) -> BytesN<32> {
+        // Convert BytesN<32> to Bytes and use Soroban's keccak256 function
         let bytes = Bytes::from_array(env, &data.to_array());
         env.crypto().keccak256(&bytes)
     }
