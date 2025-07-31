@@ -25,16 +25,13 @@ forge install
 To run tests you need to provide fork urls for Ethereum and Bsc
 
 ```shell
-SRC_CHAIN_RPC=https://eth.merkle.io DST_CHAIN_RPC=wss://bsc-rpc.publicnode.com yarn test
+SRC_CHAIN_RPC=ETH_FORK_URL DST_CHAIN_RPC=BNB_FORK_URL pnpm test
 ```
-
-SRC_CHAIN_RPC=https://eth.merkle.io
-DST_CHAIN_RPC=wss://bsc-rpc.publicnode.com
 
 ### Public rpc
 
 | Chain    | Url                          |
-| -------- | ---------------------------- |
+|----------|------------------------------|
 | Ethereum | https://eth.merkle.io        |
 | BSC      | wss://bsc-rpc.publicnode.com |
 
