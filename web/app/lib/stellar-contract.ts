@@ -43,11 +43,10 @@ export class StellarContractClient {
   async hello() {
     const client = new Client.Client({
       ...Client.networks.testnet,
-      rpcUrl: 'https://soroban-testnet.stellar.org:443',
+      rpcUrl: "https://soroban-testnet.stellar.org:443",
     });
-    const result = await client.hello({ to: 'hello' });
+    const result = await client.hello({ to: "hello" });
     return result;
-
   }
   private async getAccount() {
     if (!this.publicKey) {
