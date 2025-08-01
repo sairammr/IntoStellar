@@ -72,12 +72,20 @@ export default function SwapTypeformPage() {
   });
   const [isLoading, setIsLoading] = useState(false);
   const [swapStatus, setSwapStatus] = useState<string>('');
+  const [isLoaded, setIsLoaded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     if (videoRef.current) {
       videoRef.current.play().catch(console.error);
     }
+    
+    // Trigger fade in after a short delay
+    const timer = setTimeout(() => {
+      setIsLoaded(true);
+    }, 100);
+    
+    return () => clearTimeout(timer);
   }, []);
 
   useEffect(() => {
@@ -124,6 +132,25 @@ export default function SwapTypeformPage() {
       ...prev,
       [currentQuestion.id]: value
     }));
+  };
+
+  const hasValidAnswer = () => {
+    const currentQuestion = questions[currentStep];
+    
+    switch (currentQuestion.type) {
+      case 'asset':
+        return !!swapForm[currentQuestion.id as keyof SwapForm];
+      case 'amount':
+        return !!swapForm.fromAmount && parseFloat(swapForm.fromAmount) > 0;
+      case 'slippage':
+        return !!swapForm.slippage;
+      case 'wallet':
+        return !!swapForm.walletAddress && swapForm.walletAddress.length > 0;
+      case 'confirm':
+        return true; // Always valid on confirm step
+      default:
+        return false;
+    }
   };
 
   const handleSwap = async () => {
@@ -269,7 +296,11 @@ export default function SwapTypeformPage() {
 
       {/* Content */}
       <div className="relative z-10 h-screen flex items-center justify-center p-4 overflow-hidden">
-        <div className="max-w-4xl w-full bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10 max-h-[90vh] overflow-y-auto">
+        <div className={`
+          max-w-4xl w-full bg-white/5 backdrop-blur-md rounded-2xl p-6 border border-white/10 max-h-[90vh] overflow-y-auto
+          transition-all duration-1000 ease-out
+          ${isLoaded ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-8'}
+        `}>
           {/* Progress Bar */}
           <div className="mb-6">
             <div className="flex justify-between items-center mb-2">
@@ -316,7 +347,7 @@ export default function SwapTypeformPage() {
               {currentStep < questions.length - 1 ? (
                 <InterstellarButton
                   onClick={handleNext}
-                  disabled={!swapForm[currentQuestion.id as keyof SwapForm]}
+                  disabled={!hasValidAnswer()}
                   className="px-8 py-3 text-base"
                 >
                   Continue
@@ -324,7 +355,7 @@ export default function SwapTypeformPage() {
               ) : (
                 <InterstellarButton
                   onClick={handleSwap}
-                  disabled={isLoading}
+                  disabled={isLoading || !hasValidAnswer()}
                   loading={isLoading}
                   loadingText="PROCESSING..."
                   className="px-8 py-3 text-base"
