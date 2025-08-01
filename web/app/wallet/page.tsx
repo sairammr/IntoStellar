@@ -2,7 +2,8 @@
 
 import { useState } from 'react';
 import { Keypair } from '@stellar/stellar-sdk';
-import { Wallet } from '@stellar/typescript-wallet-sdk';
+import { useStellarAccount } from '../hooks/useStellarAccount';
+import InterstellarButton from '../components/InterstellarButton';
 
 interface WalletInfo {
   publicKey: string;
@@ -13,13 +14,9 @@ interface WalletInfo {
 
 export default function WalletPage() {
   const [wallet, setWallet] = useState<WalletInfo | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { createAccountWithFriendbot, isLoading, error } = useStellarAccount();
 
   const createAndFundWallet = async () => {
-    setLoading(true);
-    setError(null);
-
     try {
       // Generate a new keypair
       const keypair = Keypair.random();
@@ -28,35 +25,25 @@ export default function WalletPage() {
 
       console.log('Generated new keypair:', { publicKey, secretKey });
 
-      // Fund the account using Friendbot (testnet only)
-      const response = await fetch(
-        `https://friendbot.stellar.org?addr=${encodeURIComponent(publicKey)}`
-      );
+      // Use the hook to create and fund the account
+      const result = await createAccountWithFriendbot(keypair);
 
-      if (!response.ok) {
-        throw new Error(`Failed to fund account: ${response.statusText}`);
+      if (result.success) {
+        const balance = '10000.0000000'; // Friendbot typically funds with 10,000 XLM
+
+        const newWallet: WalletInfo = {
+          publicKey: result.accountId || publicKey,
+          secretKey: result.secretKey || secretKey,
+          funded: true,
+          balance
+        };
+
+        setWallet(newWallet);
+      } else {
+        console.error('Failed to create wallet:', result.error);
       }
-
-      const fundingResult = await response.json();
-      console.log('Friendbot funding result:', fundingResult);
-
-      // For now, we'll assume the account is funded successfully
-      // In a real implementation, you'd check the balance via Horizon API
-      const balance = '10000.0000000'; // Friendbot typically funds with 10,000 XLM
-
-      const newWallet: WalletInfo = {
-        publicKey,
-        secretKey,
-        funded: true,
-        balance
-      };
-
-      setWallet(newWallet);
     } catch (err) {
       console.error('Error creating wallet:', err);
-      setError(err instanceof Error ? err.message : 'Failed to create wallet');
-    } finally {
-      setLoading(false);
     }
   };
 
@@ -74,27 +61,15 @@ export default function WalletPage() {
 
         <div className="bg-white/10 backdrop-blur-lg rounded-2xl p-8 shadow-2xl">
           <div className="text-center mb-8">
-            <button
+            <InterstellarButton
               onClick={createAndFundWallet}
-              disabled={loading}
-              className={`
-                px-8 py-4 text-xl font-semibold rounded-xl transition-all duration-300
-                ${loading 
-                  ? 'bg-gray-500 cursor-not-allowed' 
-                  : 'bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700 transform hover:scale-105'
-                }
-                text-white shadow-lg hover:shadow-xl
-              `}
+              disabled={isLoading}
+              loading={isLoading}
+              loadingText="CREATING WALLET..."
+              className="px-8 py-4 text-xl"
             >
-              {loading ? (
-                <div className="flex items-center justify-center">
-                  <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white mr-3"></div>
-                  Creating Wallet...
-                </div>
-              ) : (
-                '🚀 Create & Fund Wallet'
-              )}
-            </button>
+              CREATE & FUND WALLET
+            </InterstellarButton>
           </div>
 
           {error && (
