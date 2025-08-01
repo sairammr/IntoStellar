@@ -59,13 +59,10 @@ Copy `.env.example` to `.env` and configure the following:
 - `ETH_ESCROW_FACTORY`: Ethereum EscrowFactory contract address
 - `ETH_LIMIT_ORDER_PROTOCOL`: 1inch Limit Order Protocol address
 - `STELLAR_ESCROW_FACTORY`: Stellar EscrowFactory contract ID
-- `ETH_AXELAR_GMP_WRAPPER`: (Optional) Axelar GMP wrapper contract
-- `STELLAR_AXELAR_RECEIVER`: (Optional) Axelar receiver contract
 
 ### Optional Services
 
 - **Redis**: For persistent state management
-- **Axelar**: For automated cross-chain messaging
 
 ## Usage
 
@@ -91,7 +88,7 @@ npm test
 ## Swap Lifecycle
 
 1. **Escrow Creation**: Service detects `SrcEscrowCreated` event on Ethereum
-2. **Cross-Chain Relay**: Optionally relays escrow parameters to Stellar via Axelar
+2. **Cross-Chain Relay**: Detects escrow creation and triggers corresponding escrow on other chain
 3. **Stellar Escrow**: Monitors for corresponding escrow creation on Stellar
 4. **Validation**: Validates that both escrows have matching parameters
 5. **Secret Distribution**: After finality period, reveals the secret to resolvers
@@ -105,6 +102,8 @@ The service exposes the following endpoints for monitoring:
 - `GET /status` - Service status and statistics
 - `GET /swaps` - Active swaps
 - `GET /swaps/:hashLock` - Specific swap status
+- `POST /trigger-escrow` - Manually trigger escrow creation (admin)
+- `POST /reveal-secret` - Manually reveal secret (admin)
 
 ## Event Types
 

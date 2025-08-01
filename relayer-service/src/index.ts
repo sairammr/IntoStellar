@@ -12,6 +12,7 @@ import { StellarEventMonitor } from "./monitors/StellarEventMonitor";
 import { SecretManager } from "./services/SecretManager";
 import { Logger } from "./utils/Logger";
 import { Config } from "./config/Config";
+import { RelayerAPI } from "./api/RelayerAPI";
 
 // Load environment variables
 dotenv.config();
@@ -24,6 +25,7 @@ class FusionPlusRelayer {
   private ethereumMonitor: EthereumEventMonitor;
   private stellarMonitor: StellarEventMonitor;
   private secretManager: SecretManager;
+  private relayerAPI: RelayerAPI;
   private logger = Logger.getInstance();
 
   constructor() {
@@ -36,6 +38,9 @@ class FusionPlusRelayer {
     // Initialize event monitors
     this.ethereumMonitor = new EthereumEventMonitor(this.relayerService);
     this.stellarMonitor = new StellarEventMonitor(this.relayerService);
+
+    // Initialize API server
+    this.relayerAPI = new RelayerAPI(this.relayerService);
   }
 
   /**
@@ -58,6 +63,10 @@ class FusionPlusRelayer {
       // Start the main relayer service
       await this.relayerService.start();
 
+      // Start the API server
+      const port = parseInt(process.env.PORT || "3000");
+      await this.relayerAPI.start(port);
+
       this.logger.info("🚀 Fusion+ Relayer Service started successfully!");
 
       // Setup graceful shutdown
@@ -78,6 +87,7 @@ class FusionPlusRelayer {
       await this.ethereumMonitor.stop();
       await this.stellarMonitor.stop();
       await this.relayerService.stop();
+      await this.relayerAPI.stop();
       await this.secretManager.cleanup();
 
       this.logger.info("✅ Fusion+ Relayer Service stopped gracefully");
@@ -134,10 +144,7 @@ class FusionPlusRelayer {
     // Handle unhandled promise rejections
     process.on("unhandledRejection", (reason, promise) => {
       this.logger.error(
-        "Unhandled promise rejection at:",
-        promise,
-        "reason:",
-        reason
+        `Unhandled promise rejection at: ${promise}, reason: ${reason}`
       );
       this.stop().finally(() => process.exit(1));
     });

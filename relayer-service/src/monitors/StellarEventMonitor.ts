@@ -2,7 +2,9 @@
  * @fileoverview Stellar event monitor for escrow creation and lifecycle events
  */
 
-import { Server, Horizon } from "@stellar/stellar-sdk";
+import { Horizon } from "@stellar/stellar-sdk";
+import StellarSdk from "@stellar/stellar-sdk";
+const { Server } = StellarSdk;
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { RelayerService, EscrowCreatedEvent } from "../services/RelayerService";
@@ -22,7 +24,7 @@ export class StellarEventMonitor {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
   private relayerService: RelayerService;
-  private server: Server;
+  private server: typeof Server;
   private running = false;
   private lastProcessedLedger = 0;
   private eventStreamCloser?: () => void;
@@ -93,10 +95,10 @@ export class StellarEventMonitor {
         .forAccount(this.config.contracts.stellar.escrowFactory)
         .cursor("now")
         .stream({
-          onmessage: (operation) => {
+          onmessage: (operation: any) => {
             this.handleOperation(operation);
           },
-          onerror: (error) => {
+          onerror: (error: any) => {
             this.logger.error("Stellar event stream error:", error);
             // Attempt to reconnect
             if (this.running) {
@@ -203,7 +205,7 @@ export class StellarEventMonitor {
     }
 
     const invokeOp =
-      operation as Horizon.HorizonApi.InvokeHostFunctionOperationRecord;
+      operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse;
 
     // Check if the contract being called is our escrow factory
     // Note: You'll need to adapt this based on how Stellar contract calls are structured
@@ -222,7 +224,7 @@ export class StellarEventMonitor {
     try {
       if (operation.type === "invoke_host_function") {
         await this.handleContractInvocation(
-          operation as Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+          operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse
         );
       }
     } catch (error) {
@@ -234,7 +236,7 @@ export class StellarEventMonitor {
    * Handle contract invocation operations
    */
   private async handleContractInvocation(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
       // Get the transaction details to access events
@@ -255,7 +257,7 @@ export class StellarEventMonitor {
    */
   private async parseContractEvents(
     transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
       // Note: This is a simplified implementation
@@ -283,7 +285,7 @@ export class StellarEventMonitor {
    * Extract function name from contract invocation
    */
   private extractFunctionName(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // This is a placeholder implementation
     // In practice, you'd decode the XDR to get the actual function name
@@ -299,7 +301,7 @@ export class StellarEventMonitor {
    */
   private async handleEscrowCreatedEvent(
     transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
       // Extract escrow parameters from the operation
@@ -335,7 +337,7 @@ export class StellarEventMonitor {
    */
   private async handleWithdrawalEvent(
     transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
       const hashLock = this.extractHashLock(operation);
@@ -362,7 +364,7 @@ export class StellarEventMonitor {
    */
   private async handleCancellationEvent(
     transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
       const hashLock = this.extractHashLock(operation);
@@ -384,42 +386,42 @@ export class StellarEventMonitor {
 
   // Placeholder extraction methods - implement proper XDR decoding
   private extractHashLock(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "0x" + "0".repeat(64); // Placeholder
   }
 
   private extractResolver(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
   }
 
   private extractToken(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
   }
 
   private extractAmount(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "1000000"; // Placeholder
   }
 
   private extractSafetyDeposit(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "100000"; // Placeholder
   }
 
   private extractSecret(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationRecord
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // Implement proper parameter extraction from XDR
     return "0x" + "0".repeat(64); // Placeholder

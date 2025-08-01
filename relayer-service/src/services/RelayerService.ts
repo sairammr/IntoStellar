@@ -327,6 +327,57 @@ export class RelayerService extends EventEmitter {
   }
 
   /**
+   * Get a specific swap (alias for getSwapStatus)
+   */
+  getSwap(hashLock: string): SwapStatus | undefined {
+    return this.getSwapStatus(hashLock);
+  }
+
+  /**
+   * Get service statistics (alias for getStatistics)
+   */
+  getStats() {
+    return this.getStatistics();
+  }
+
+  /**
+   * Manually reveal a secret for a swap (admin function)
+   */
+  async manualSecretReveal(hashLock: string, secret: string): Promise<boolean> {
+    const swap = this.activeSwaps.get(hashLock);
+    if (!swap) {
+      throw new Error(`Swap with hashLock ${hashLock} not found`);
+    }
+
+    if (swap.secretRevealed) {
+      throw new Error(`Secret for swap ${hashLock} already revealed`);
+    }
+
+    // Validate the secret matches the hash lock
+    const crypto = require("crypto");
+    const hash = crypto
+      .createHash("sha256")
+      .update(Buffer.from(secret, "hex"))
+      .digest("hex");
+    if (`0x${hash}` !== hashLock) {
+      throw new Error("Secret does not match hash lock");
+    }
+
+    this.logger.info(`Manual secret reveal for swap ${hashLock}`);
+
+    // Update swap status
+    swap.secretRevealed = true;
+    swap.secretValue = secret;
+    swap.updatedAt = Date.now();
+
+    // Emit the secret revealed event
+    await this.secretManager.revealSecret(hashLock);
+    this.emit("secretRevealed", { hashLock, secret });
+
+    return true;
+  }
+
+  /**
    * Get statistics about the relayer service
    */
   getStatistics(): {

@@ -33,8 +33,8 @@ export class EthereumEventMonitor {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
   private relayerService: RelayerService;
-  private provider: ethers.Provider;
-  private escrowFactory: ethers.Contract;
+  private provider!: ethers.Provider;
+  private escrowFactory!: ethers.Contract;
   private running = false;
   private lastProcessedBlock = 0;
 
@@ -214,7 +214,7 @@ export class EthereumEventMonitor {
       );
 
       for (const event of srcEvents) {
-        if (event.args) {
+        if (event instanceof ethers.EventLog && event.args) {
           await this.handleSrcEscrowCreated(
             event.args[0],
             event.args[1],
@@ -232,7 +232,7 @@ export class EthereumEventMonitor {
       );
 
       for (const event of dstEvents) {
-        if (event.args) {
+        if (event instanceof ethers.EventLog && event.args) {
           await this.handleDstEscrowCreated(
             event.args[0],
             event.args[1],
@@ -258,7 +258,7 @@ export class EthereumEventMonitor {
    */
   private async handleSrcEscrowCreated(
     immutables: any,
-    dstComplement: any,
+    _dstComplement: any,
     event: ethers.EventLog
   ): Promise<void> {
     try {
@@ -294,7 +294,7 @@ export class EthereumEventMonitor {
   private async handleDstEscrowCreated(
     escrowAddress: string,
     hashLock: string,
-    taker: any,
+    _taker: any,
     event: ethers.EventLog
   ): Promise<void> {
     try {

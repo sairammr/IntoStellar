@@ -22,19 +22,11 @@ export interface StellarConfig {
 export interface ContractConfig {
   ethereum: {
     escrowFactory: string;
-    axelarGMPWrapper?: string;
     limitOrderProtocol: string;
   };
   stellar: {
     escrowFactory: string;
-    axelarReceiver?: string;
   };
-}
-
-export interface AxelarConfig {
-  environment: "mainnet" | "testnet";
-  gasServiceUrl: string;
-  gatewayUrl: string;
 }
 
 export interface RedisConfig {
@@ -48,7 +40,6 @@ export interface RelayerConfig {
   ethereum: EthereumConfig;
   stellar: StellarConfig;
   contracts: ContractConfig;
-  axelar?: AxelarConfig;
   redis?: RedisConfig;
   monitoring: {
     healthCheckInterval: number;
@@ -113,13 +104,6 @@ export class Config {
   }
 
   /**
-   * Get Axelar configuration
-   */
-  get axelar(): AxelarConfig | undefined {
-    return this.config.axelar;
-  }
-
-  /**
    * Get Redis configuration
    */
   get redis(): RedisConfig | undefined {
@@ -169,23 +153,13 @@ export class Config {
       contracts: {
         ethereum: {
           escrowFactory: this.getEnvVar("ETH_ESCROW_FACTORY"),
-          axelarGMPWrapper: process.env.ETH_AXELAR_GMP_WRAPPER,
           limitOrderProtocol: this.getEnvVar("ETH_LIMIT_ORDER_PROTOCOL"),
         },
         stellar: {
           escrowFactory: this.getEnvVar("STELLAR_ESCROW_FACTORY"),
-          axelarReceiver: process.env.STELLAR_AXELAR_RECEIVER,
         },
       },
-      axelar: process.env.AXELAR_ENVIRONMENT
-        ? {
-            environment:
-              (process.env.AXELAR_ENVIRONMENT as "mainnet" | "testnet") ||
-              "testnet",
-            gasServiceUrl: this.getEnvVar("AXELAR_GAS_SERVICE_URL"),
-            gatewayUrl: this.getEnvVar("AXELAR_GATEWAY_URL"),
-          }
-        : undefined,
+
       redis: process.env.REDIS_HOST
         ? {
             host: this.getEnvVar("REDIS_HOST", "localhost"),
