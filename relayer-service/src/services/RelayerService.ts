@@ -6,14 +6,19 @@ import { EventEmitter } from "events";
 import { Logger } from "../utils/Logger";
 import { SecretManager } from "./SecretManager";
 import { Config } from "../config/Config";
+import { TimelockManager } from "../utils/TimelockManager";
+import { TimelockData } from "../types/Events";
+import { CrossChainOrchestrator } from "./CrossChainOrchestrator";
 
 export interface EscrowCreatedEvent {
   hashLock: string;
+  orderHash: string;
   maker: string;
-  resolver: string;
+  taker: string;
   token: string;
   amount: string;
   safetyDeposit: string;
+  timelocks: TimelockData;
   chain: "ethereum" | "stellar";
   blockNumber?: number;
   transactionHash: string;
@@ -40,12 +45,15 @@ export class RelayerService extends EventEmitter {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
   private secretManager: SecretManager;
+  private timelockManager = new TimelockManager();
+  private crossChainOrchestrator: CrossChainOrchestrator;
   private activeSwaps = new Map<string, SwapStatus>();
   private running = false;
 
   constructor(secretManager: SecretManager) {
     super();
     this.secretManager = secretManager;
+    this.crossChainOrchestrator = new CrossChainOrchestrator();
     this.setupEventHandlers();
   }
 
@@ -106,6 +114,22 @@ export class RelayerService extends EventEmitter {
     }
     swapStatus.updatedAt = Date.now();
 
+    // 🚀 CRITICAL FIX: Automatically create corresponding escrow on the other chain
+    try {
+      await this.crossChainOrchestrator.handleEscrowCreated(event);
+      this.logger.info("Cross-chain escrow creation initiated", {
+        hashLock,
+        chain,
+      });
+    } catch (error) {
+      this.logger.error("Failed to create cross-chain escrow", {
+        hashLock,
+        chain,
+        error,
+      });
+      // Don't fail the entire process, just log the error
+    }
+
     // Check if both escrows are ready
     await this.checkSwapReadiness(hashLock);
   }
@@ -148,7 +172,7 @@ export class RelayerService extends EventEmitter {
   }
 
   /**
-   * Distribute the secret to complete the swap
+   * Distribute the secret to complete the swap with 7-stage timelock validation
    */
   private async distributeSecret(hashLock: string): Promise<void> {
     const swapStatus = this.activeSwaps.get(hashLock);
@@ -156,7 +180,51 @@ export class RelayerService extends EventEmitter {
       return;
     }
 
+    // Must have both escrows to proceed
+    if (!swapStatus.ethereumEscrow || !swapStatus.stellarEscrow) {
+      this.logger.debug("Waiting for both escrows to be created", { hashLock });
+      return;
+    }
+
     try {
+      const currentTime = Date.now();
+
+      // Validate timelock compatibility
+      if (
+        !this.timelockManager.validateTimelocks(
+          swapStatus.ethereumEscrow.timelocks
+        )
+      ) {
+        throw new Error("Invalid Ethereum timelock configuration");
+      }
+      if (
+        !this.timelockManager.validateTimelocks(
+          swapStatus.stellarEscrow.timelocks
+        )
+      ) {
+        throw new Error("Invalid Stellar timelock configuration");
+      }
+
+      // Check if we should distribute the secret now
+      const shouldDistribute = this.timelockManager.shouldDistributeSecret(
+        swapStatus.ethereumEscrow.timelocks,
+        swapStatus.stellarEscrow.timelocks,
+        currentTime
+      );
+
+      if (!shouldDistribute) {
+        this.logger.debug("Not yet time to distribute secret", {
+          hashLock,
+          currentTime,
+          ethereumTimelocks: swapStatus.ethereumEscrow.timelocks,
+          stellarTimelocks: swapStatus.stellarEscrow.timelocks,
+        });
+
+        // Schedule for retry later
+        setTimeout(() => this.distributeSecret(hashLock), 30000); // Check again in 30 seconds
+        return;
+      }
+
       this.logger.info(`Distributing secret for swap`, { hashLock });
 
       // Get the secret from secret manager
@@ -168,6 +236,13 @@ export class RelayerService extends EventEmitter {
       swapStatus.secretRevealed = true;
       swapStatus.secretValue = secret;
       swapStatus.updatedAt = Date.now();
+
+      // Log timelock status for debugging
+      this.timelockManager.logStatus(
+        hashLock,
+        swapStatus.ethereumEscrow.timelocks,
+        currentTime
+      );
 
       this.logger.info(`Secret distributed successfully`, { hashLock });
 
@@ -385,6 +460,11 @@ export class RelayerService extends EventEmitter {
     completedSwaps: number;
     cancelledSwaps: number;
     totalSwaps: number;
+    orchestratorStatus: {
+      ethereumConnected: boolean;
+      ethereumAddress: string;
+      ethereumFactoryAddress: string;
+    };
   } {
     const swaps = Array.from(this.activeSwaps.values());
     return {
@@ -392,6 +472,7 @@ export class RelayerService extends EventEmitter {
       completedSwaps: swaps.filter((s) => s.completed).length,
       cancelledSwaps: swaps.filter((s) => s.cancelled).length,
       totalSwaps: swaps.length,
+      orchestratorStatus: this.crossChainOrchestrator.getStatus(),
     };
   }
 }

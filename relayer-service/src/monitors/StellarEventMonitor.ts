@@ -307,13 +307,28 @@ export class StellarEventMonitor {
       // Extract escrow parameters from the operation
       // This is a simplified implementation - you'd need to decode XDR properly
 
+      // TODO: Properly decode Stellar event XDR to extract complete timelock information
+      // For now, using placeholder values - this needs proper XDR decoding implementation
       const escrowEvent: EscrowCreatedEvent = {
         hashLock: this.extractHashLock(operation),
+        orderHash: "0x" + "0".repeat(64), // TODO: Extract from XDR
         maker: operation.source_account,
-        resolver: this.extractResolver(operation),
+        taker: this.extractResolver(operation),
         token: this.extractToken(operation),
         amount: this.extractAmount(operation),
         safetyDeposit: this.extractSafetyDeposit(operation),
+        timelocks: {
+          // TODO: Extract actual timelock values from Stellar event XDR
+          finality: 300, // 5 minutes
+          srcWithdrawal: 3600, // 1 hour
+          srcPublicWithdrawal: 7200, // 2 hours
+          srcCancellation: 14400, // 4 hours
+          srcPublicCancellation: 21600, // 6 hours
+          dstWithdrawal: 3600, // 1 hour
+          dstPublicWithdrawal: 7200, // 2 hours
+          dstCancellation: 28800, // 8 hours
+          deployedAt: new Date(transaction.created_at).getTime(),
+        },
         chain: "stellar",
         transactionHash: transaction.hash,
         timestamp: new Date(transaction.created_at).getTime(),

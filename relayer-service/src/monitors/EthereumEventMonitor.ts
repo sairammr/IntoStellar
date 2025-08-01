@@ -262,13 +262,27 @@ export class EthereumEventMonitor {
     event: ethers.EventLog
   ): Promise<void> {
     try {
+      // Extract timelock information from EVM immutables
+      const timelocks = immutables.timelocks;
       const escrowEvent: EscrowCreatedEvent = {
         hashLock: immutables.hashlock,
+        orderHash: immutables.orderHash,
         maker: immutables.maker,
-        resolver: immutables.taker.toString(), // Convert from packed address
+        taker: immutables.taker.toString(), // Convert from packed address
         token: immutables.token,
         amount: immutables.amount.toString(),
         safetyDeposit: immutables.safetyDeposit.toString(),
+        timelocks: {
+          finality: Number(timelocks.finality || 0),
+          srcWithdrawal: Number(timelocks.srcWithdrawal || 0),
+          srcPublicWithdrawal: Number(timelocks.srcPublicWithdrawal || 0),
+          srcCancellation: Number(timelocks.srcCancellation || 0),
+          srcPublicCancellation: Number(timelocks.srcPublicCancellation || 0),
+          dstWithdrawal: Number(timelocks.dstWithdrawal || 0),
+          dstPublicWithdrawal: Number(timelocks.dstPublicWithdrawal || 0),
+          dstCancellation: Number(timelocks.dstCancellation || 0),
+          deployedAt: Date.now(), // Current time as deployment
+        },
         chain: "ethereum",
         blockNumber: event.blockNumber,
         transactionHash: event.transactionHash,

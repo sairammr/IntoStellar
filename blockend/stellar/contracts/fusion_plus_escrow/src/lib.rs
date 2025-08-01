@@ -33,19 +33,25 @@ pub struct Immutables {
     pub timelocks: Timelocks,
 }
 
-/// Complex timelock system matching EVM exactly
+/// Complex timelock system matching EVM exactly (7 stages)
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct Timelocks {
     /// Finality delay before any action (seconds)
     pub finality: u32,
-    /// Private withdrawal time for resolver only (seconds from deployment)
+    /// Stage 0: Private withdrawal time for taker only (seconds from deployment)
     pub src_withdrawal: u32,
-    /// Cancellation time (seconds from deployment)  
+    /// Stage 1: Public withdrawal time - anyone can withdraw for taker (seconds from deployment)
+    pub src_public_withdrawal: u32,
+    /// Stage 2: Private cancellation time for taker only (seconds from deployment)  
     pub src_cancellation: u32,
-    /// Cross-chain withdrawal coordination (seconds from deployment)
+    /// Stage 3: Public cancellation time - anyone can cancel (seconds from deployment)
+    pub src_public_cancellation: u32,
+    /// Stage 4: Private withdrawal time for maker only (seconds from deployment)
     pub dst_withdrawal: u32,
-    /// Cross-chain cancellation coordination (seconds from deployment)
+    /// Stage 5: Public withdrawal time - anyone can withdraw for maker (seconds from deployment)
+    pub dst_public_withdrawal: u32,
+    /// Stage 6: Cancellation time for destination (seconds from deployment)
     pub dst_cancellation: u32,
     /// Deployment timestamp (ledger timestamp)
     pub deployed_at: u64,
@@ -65,14 +71,17 @@ pub struct InitParams {
     pub timelocks: TimelockParams,
 }
 
-/// Timelock parameters for initialization
+/// Timelock parameters for initialization (7-stage system)
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct TimelockParams {
     pub finality: u32,
     pub src_withdrawal: u32,
+    pub src_public_withdrawal: u32,
     pub src_cancellation: u32,
+    pub src_public_cancellation: u32,
     pub dst_withdrawal: u32,
+    pub dst_public_withdrawal: u32,
     pub dst_cancellation: u32,
 }
 
@@ -167,11 +176,26 @@ impl FusionPlusEscrow {
             return Err(Error::InvalidParams);
         }
 
-        // Ensure proper timelock ordering (matching EVM logic)
+        // Ensure proper timelock ordering (matching EVM 7-stage logic)
         if params.timelocks.src_withdrawal <= params.timelocks.finality {
             return Err(Error::InvalidParams);
         }
-        if params.timelocks.src_cancellation <= params.timelocks.src_withdrawal {
+        if params.timelocks.src_public_withdrawal <= params.timelocks.src_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.src_cancellation <= params.timelocks.src_public_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.src_public_cancellation <= params.timelocks.src_cancellation {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.dst_withdrawal <= params.timelocks.finality {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.dst_public_withdrawal <= params.timelocks.dst_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if params.timelocks.dst_cancellation <= params.timelocks.dst_public_withdrawal {
             return Err(Error::InvalidParams);
         }
 
@@ -180,8 +204,11 @@ impl FusionPlusEscrow {
         let timelocks = Timelocks {
             finality: params.timelocks.finality,
             src_withdrawal: params.timelocks.src_withdrawal,
+            src_public_withdrawal: params.timelocks.src_public_withdrawal,
             src_cancellation: params.timelocks.src_cancellation,
+            src_public_cancellation: params.timelocks.src_public_cancellation,
             dst_withdrawal: params.timelocks.dst_withdrawal,
+            dst_public_withdrawal: params.timelocks.dst_public_withdrawal,
             dst_cancellation: params.timelocks.dst_cancellation,
             deployed_at,
         };
@@ -286,14 +313,18 @@ impl FusionPlusEscrow {
         }
 
         let current_time = env.ledger().timestamp();
+        let finality_time = immutables.timelocks.deployed_at + immutables.timelocks.finality as u64;
         let withdrawal_time = immutables.timelocks.deployed_at + immutables.timelocks.src_withdrawal as u64;
-        let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
+        let public_withdrawal_time = immutables.timelocks.deployed_at + immutables.timelocks.src_public_withdrawal as u64;
 
-        // Check timing: after withdrawal time, before cancellation time
+        // Stage 0: Private withdrawal - only taker can withdraw after finality + src_withdrawal
+        if current_time < finality_time {
+            return Err(Error::InvalidTime);
+        }
         if current_time < withdrawal_time {
             return Err(Error::InvalidTime);
         }
-        if current_time >= cancellation_time {
+        if current_time >= public_withdrawal_time {
             return Err(Error::InvalidTime);
         }
 
@@ -344,13 +375,14 @@ impl FusionPlusEscrow {
         }
 
         let current_time = env.ledger().timestamp();
+        let finality_time = immutables.timelocks.deployed_at + immutables.timelocks.finality as u64;
+        let public_withdrawal_time = immutables.timelocks.deployed_at + immutables.timelocks.src_public_withdrawal as u64;
         let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
-        
-        // For public withdrawal, we allow a grace period before cancellation
-        let public_withdrawal_time = immutables.timelocks.deployed_at + 
-            immutables.timelocks.src_withdrawal as u64 + 3600; // 1 hour grace period
 
-        // Check timing: after public withdrawal time, before cancellation time
+        // Stage 1: Public withdrawal - anyone can withdraw after src_public_withdrawal
+        if current_time < finality_time {
+            return Err(Error::InvalidTime);
+        }
         if current_time < public_withdrawal_time {
             return Err(Error::InvalidTime);
         }
@@ -398,15 +430,23 @@ impl FusionPlusEscrow {
         }
 
         let current_time = env.ledger().timestamp();
+        let finality_time = immutables.timelocks.deployed_at + immutables.timelocks.finality as u64;
         let cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_cancellation as u64;
+        let public_cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_public_cancellation as u64;
 
-        // Check timing: after cancellation time
+        // Stage 2: Private cancellation - only taker can cancel after src_cancellation
+        if current_time < finality_time {
+            return Err(Error::InvalidTime);
+        }
         if current_time < cancellation_time {
             return Err(Error::InvalidTime);
         }
+        if current_time >= public_cancellation_time {
+            return Err(Error::InvalidTime);
+        }
 
-        // Only maker or taker can cancel
-        if caller != immutables.maker && caller != immutables.taker {
+        // Only taker can do private cancellation
+        if caller != immutables.taker {
             return Err(Error::Unauthorized);
         }
 
@@ -418,6 +458,55 @@ impl FusionPlusEscrow {
 
         // Return safety deposit to maker
         Self::transfer_native(&env, &immutables.maker, immutables.safety_deposit)?;
+
+        // Emit cancellation event
+        env.events().publish(
+            (String::from_str(&env, "EscrowCancelled"),),
+            EscrowCancelledEvent {
+                hash_lock: immutables.hash_lock,
+                cancelled_by: caller,
+                refund_to: immutables.maker,
+            }
+        );
+
+        Ok(())
+    }
+
+    /// Public cancellation (anyone can call after timeout)
+    /// Stage 3: Public cancellation - anyone can cancel after src_public_cancellation
+    pub fn public_cancel(env: Env, caller: Address) -> Result<(), Error> {
+        let immutables = Self::get_immutables_internal(&env)?;
+        
+        caller.require_auth();
+
+        // Verify not already withdrawn/cancelled
+        if Self::is_withdrawn_internal(&env)? {
+            return Err(Error::AlreadyWithdrawn);
+        }
+        if Self::is_cancelled_internal(&env)? {
+            return Err(Error::AlreadyCancelled);
+        }
+
+        let current_time = env.ledger().timestamp();
+        let finality_time = immutables.timelocks.deployed_at + immutables.timelocks.finality as u64;
+        let public_cancellation_time = immutables.timelocks.deployed_at + immutables.timelocks.src_public_cancellation as u64;
+
+        // Stage 3: Public cancellation - anyone can cancel after src_public_cancellation
+        if current_time < finality_time {
+            return Err(Error::InvalidTime);
+        }
+        if current_time < public_cancellation_time {
+            return Err(Error::InvalidTime);
+        }
+
+        // Mark as cancelled
+        env.storage().instance().set(&DataKey::Cancelled, &true);
+
+        // Return tokens to maker
+        Self::transfer_tokens(&env, &immutables, &immutables.maker)?;
+
+        // Transfer safety deposit to caller (incentive for public cancellation)
+        Self::transfer_native(&env, &caller, immutables.safety_deposit)?;
 
         // Emit cancellation event
         env.events().publish(
@@ -479,13 +568,12 @@ impl FusionPlusEscrow {
     fn is_native_token(_token: &Address) -> bool {
         // In Soroban, native XLM is represented by the Stellar Asset Contract (SAC)
         // The native XLM token contract has a deterministic address
-        // For now, we'll use a simple check - in production, you'd compare against the actual native XLM SAC address
         // The native XLM SAC address is: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
         
-        // Placeholder: Check if token represents native XLM
-        // In practice, you'd store the native XLM contract address and compare:
+        // For now, we'll use a simple check - in production, you'd compare against the actual native XLM SAC address:
         // *token == Address::from_string("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA")
-        false // For safety, assume all tokens are token contracts for now
+        // For safety, assume all tokens are token contracts for now
+        false
     }
 
     fn transfer_tokens(env: &Env, immutables: &Immutables, to: &Address) -> Result<(), Error> {

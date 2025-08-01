@@ -11,6 +11,19 @@ export interface BaseEvent {
   timestamp: number;
 }
 
+// Complete 7-stage timelock system
+export interface TimelockData {
+  finality: number;
+  srcWithdrawal: number;
+  srcPublicWithdrawal: number;
+  srcCancellation: number;
+  srcPublicCancellation: number;
+  dstWithdrawal: number;
+  dstPublicWithdrawal: number;
+  dstCancellation: number;
+  deployedAt: number;
+}
+
 // Ethereum-specific events
 export interface EthereumEscrowCreatedEvent extends BaseEvent {
   escrowAddress: string;
@@ -20,14 +33,7 @@ export interface EthereumEscrowCreatedEvent extends BaseEvent {
   token: string;
   amount: string;
   safetyDeposit: string;
-  timelocks: {
-    finality: number;
-    srcWithdrawal: number;
-    srcCancellation: number;
-    dstWithdrawal: number;
-    dstCancellation: number;
-    deployedAt: number;
-  };
+  timelocks: TimelockData;
   chain: "ethereum";
 }
 
@@ -40,14 +46,7 @@ export interface StellarEscrowCreatedEvent extends BaseEvent {
   token: string;
   amount: string;
   safetyDeposit: string;
-  timelocks: {
-    finality: number;
-    srcWithdrawal: number;
-    srcCancellation: number;
-    dstWithdrawal: number;
-    dstCancellation: number;
-    deployedAt: number;
-  };
+  timelocks: TimelockData;
   chain: "stellar";
 }
 
@@ -55,12 +54,17 @@ export interface StellarEscrowCreatedEvent extends BaseEvent {
 export interface WithdrawalEvent extends BaseEvent {
   escrowAddress: string;
   secret: string;
+  withdrawnBy: string;
+  isPublicWithdrawal: boolean;
   chain: "ethereum" | "stellar";
 }
 
 // Cancellation events
 export interface CancellationEvent extends BaseEvent {
   escrowAddress: string;
+  cancelledBy: string;
+  refundTo: string;
+  isPublicCancellation: boolean;
   chain: "ethereum" | "stellar";
 }
 

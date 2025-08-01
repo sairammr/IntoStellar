@@ -6,6 +6,23 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, contracterror, Address, BytesN, Env, String,
 };
 
+// We'll manually define the types we need from fusion_plus_escrow
+// This avoids the external crate dependency issue
+
+// Timelock parameters for factory functions
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct FactoryTimelockParams {
+    pub finality_delay: u32,
+    pub src_withdrawal_delay: u32,
+    pub src_public_withdrawal_delay: u32,
+    pub src_cancellation_delay: u32,
+    pub src_public_cancellation_delay: u32,
+    pub dst_withdrawal_delay: u32,
+    pub dst_public_withdrawal_delay: u32,
+    pub dst_cancellation_delay: u32,
+}
+
 // Storage keys
 #[derive(Clone)]
 #[contracttype]
@@ -16,7 +33,7 @@ pub enum DataKey {
     Admin,
 }
 
-// Events matching EVM factory exactly
+// Events matching EVM factory exactly with full timelock data
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct SrcEscrowCreatedEvent {
@@ -28,16 +45,36 @@ pub struct SrcEscrowCreatedEvent {
     pub token: Address,
     pub amount: i128,
     pub safety_deposit: i128,
-    pub withdrawal_time: u64,
-    pub cancellation_time: u64,
+    pub timelocks: TimelockInfo,
 }
 
 #[derive(Clone, Debug)]
 #[contracttype]
 pub struct DstEscrowCreatedEvent {
-    pub escrow_address: Address,
+    pub order_hash: BytesN<32>,
     pub hash_lock: BytesN<32>,
+    pub escrow_address: Address,
+    pub maker: Address,
     pub taker: Address,
+    pub token: Address,
+    pub amount: i128,
+    pub safety_deposit: i128,
+    pub timelocks: TimelockInfo,
+}
+
+// Complete timelock information for events
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct TimelockInfo {
+    pub finality: u32,
+    pub src_withdrawal: u32,
+    pub src_public_withdrawal: u32,
+    pub src_cancellation: u32,
+    pub src_public_cancellation: u32,
+    pub dst_withdrawal: u32,
+    pub dst_public_withdrawal: u32,
+    pub dst_cancellation: u32,
+    pub deployed_at: u64,
 }
 
 #[contract]
@@ -85,9 +122,7 @@ impl StellarEscrowFactory {
         token: Address,
         amount: i128,
         safety_deposit: i128,
-        finality_delay: u32,
-        withdrawal_delay: u32,
-        cancellation_delay: u32,
+        timelocks: FactoryTimelockParams,
     ) -> Result<Address, Error> {
         if !env.storage().instance().has(&DataKey::Initialized) {
             return Err(Error::NotInitialized);
@@ -103,10 +138,26 @@ impl StellarEscrowFactory {
             return Err(Error::InvalidParams);
         }
 
-        if withdrawal_delay <= finality_delay {
+        // Validate 7-stage timelock ordering
+        if timelocks.src_withdrawal_delay <= timelocks.finality_delay {
             return Err(Error::InvalidParams);
         }
-        if cancellation_delay <= withdrawal_delay {
+        if timelocks.src_public_withdrawal_delay <= timelocks.src_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_cancellation_delay <= timelocks.src_public_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_public_cancellation_delay <= timelocks.src_cancellation_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_withdrawal_delay <= timelocks.finality_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_public_withdrawal_delay <= timelocks.dst_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_cancellation_delay <= timelocks.dst_public_withdrawal_delay {
             return Err(Error::InvalidParams);
         }
 
@@ -117,9 +168,11 @@ impl StellarEscrowFactory {
             &escrow_address,
         );
 
+        // TODO: Initialize the deployed escrow with all parameters
+        // This needs to be called separately after deployment
+        // The escrow.initialize() call should be made by the relayer or caller
+
         let current_time = env.ledger().timestamp();
-        let withdrawal_time = current_time + withdrawal_delay as u64;
-        let cancellation_time = current_time + cancellation_delay as u64;
 
         env.events().publish(
             (String::from_str(&env, "SrcEscrowCreated"),),
@@ -132,8 +185,17 @@ impl StellarEscrowFactory {
                 token,
                 amount,
                 safety_deposit,
-                withdrawal_time,
-                cancellation_time,
+                timelocks: TimelockInfo {
+                    finality: timelocks.finality_delay,
+                    src_withdrawal: timelocks.src_withdrawal_delay,
+                    src_public_withdrawal: timelocks.src_public_withdrawal_delay,
+                    src_cancellation: timelocks.src_cancellation_delay,
+                    src_public_cancellation: timelocks.src_public_cancellation_delay,
+                    dst_withdrawal: timelocks.dst_withdrawal_delay,
+                    dst_public_withdrawal: timelocks.dst_public_withdrawal_delay,
+                    dst_cancellation: timelocks.dst_cancellation_delay,
+                    deployed_at: current_time,
+                },
             }
         );
 
@@ -149,6 +211,7 @@ impl StellarEscrowFactory {
         token: Address,
         amount: i128,
         safety_deposit: i128,
+        timelocks: FactoryTimelockParams,
         caller: Address,
     ) -> Result<Address, Error> {
         if !env.storage().instance().has(&DataKey::Initialized) {
@@ -165,7 +228,34 @@ impl StellarEscrowFactory {
             return Err(Error::InvalidParams);
         }
 
+        // Validate 7-stage timelock ordering for dst escrow
+        if timelocks.src_withdrawal_delay <= timelocks.finality_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_public_withdrawal_delay <= timelocks.src_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_cancellation_delay <= timelocks.src_public_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_public_cancellation_delay <= timelocks.src_cancellation_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_withdrawal_delay <= timelocks.finality_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_public_withdrawal_delay <= timelocks.dst_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_cancellation_delay <= timelocks.dst_public_withdrawal_delay {
+            return Err(Error::InvalidParams);
+        }
+
         let escrow_address = Self::deploy_escrow_instance(&env, hash_lock.clone())?;
+
+        // TODO: Initialize the deployed dst escrow with all parameters
+        // This needs to be called separately after deployment
+        // The escrow.initialize() call should be made by the relayer or caller
 
         env.storage().persistent().set(
             &DataKey::EscrowMapping(hash_lock.clone()),
@@ -175,9 +265,25 @@ impl StellarEscrowFactory {
         env.events().publish(
             (String::from_str(&env, "DstEscrowCreated"),),
             DstEscrowCreatedEvent {
-                escrow_address: escrow_address.clone(),
+                order_hash,
                 hash_lock,
+                escrow_address: escrow_address.clone(),
+                maker,
                 taker,
+                token,
+                amount,
+                safety_deposit,
+                timelocks: TimelockInfo {
+                    finality: timelocks.finality_delay,
+                    src_withdrawal: timelocks.src_withdrawal_delay,
+                    src_public_withdrawal: timelocks.src_public_withdrawal_delay,
+                    src_cancellation: timelocks.src_cancellation_delay,
+                    src_public_cancellation: timelocks.src_public_cancellation_delay,
+                    dst_withdrawal: timelocks.dst_withdrawal_delay,
+                    dst_public_withdrawal: timelocks.dst_public_withdrawal_delay,
+                    dst_cancellation: timelocks.dst_cancellation_delay,
+                    deployed_at: env.ledger().timestamp(),
+                },
             }
         );
 
