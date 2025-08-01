@@ -130,7 +130,7 @@ STELLAR_IDENTITY="alice"
 
 # Ethereum Configuration
 ETH_RPC_URL="https://sepolia.infura.io/v3/YOUR_INFURA_KEY"
-ETH_PRIVATE_KEY="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+ETH_PRIVATE_KEY=" "
 
 # Relayer Configuration
 RELAYER_PORT=3000

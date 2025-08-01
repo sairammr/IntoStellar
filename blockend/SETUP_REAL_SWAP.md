@@ -44,7 +44,7 @@ cd ../../evm && npm install
 ```bash
 # Ethereum Configuration
 ETHEREUM_RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_API_KEY
-ETHEREUM_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+ETHEREUM_PRIVATE_KEY=
 ETHEREUM_ESCROW_FACTORY=0x... # Will be filled after deployment
 
 # Stellar Configuration
@@ -62,7 +62,7 @@ CORS_ORIGIN=http://localhost:3000
 
 ```bash
 INFURA_API_KEY=your_infura_api_key_here
-PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+PRIVATE_KEY=
 SEPOLIA_RPC_URL=https://sepolia.infura.io/v3/YOUR_INFURA_API_KEY
 ```
 

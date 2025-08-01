@@ -17,7 +17,7 @@ NC='\033[0m' # No Color
 STELLAR_NETWORK="testnet"
 STELLAR_IDENTITY="alice"
 ETH_RPC_URL="https://sepolia.infura.io/v3/YOUR_INFURA_KEY"  # Replace with your Infura key
-ETH_PRIVATE_KEY="0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"  # Replace with your private key
+ETH_PRIVATE_KEY=" "  # Replace with your private key
 
 echo -e "${PURPLE}🌉 Cross-Chain Atomic Swap Test: ETH → XLM${NC}"
 echo "=================================================="
@@ -128,7 +128,7 @@ echo -e "\n${BLUE}🔗 Step 2: Simulating Ethereum side (1inch Fusion+)...${NC}"
 
 print_ethereum "User creates cross-chain order on 1inch Fusion+"
 print_ethereum "Order details:"
-print_ethereum "  - Maker: 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+print_ethereum "  - Maker:  "
 print_ethereum "  - Making: 0.1 ETH"
 print_ethereum "  - Taking: 100 XLM"
 print_ethereum "  - Maker Asset: ETH"
@@ -157,7 +157,7 @@ print_relayer "Detected EscrowSrcCreated event:"
 print_relayer "  - Order Hash: $ORDER_HASH"
 print_relayer "  - Secret Hash: $SECRET_HASH"
 print_relayer "  - Amount: 0.1 ETH"
-print_relayer "  - Maker: 0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d"
+print_relayer "  - Maker:  "
 print_relayer "  - Taker: GD2RAKWBEOJ3P5YPURRWW6FRAYJYUQ2PH3GX6ITBM5VKML4O5TLAWWXC"
 
 print_relayer "Creating corresponding Stellar escrow..."

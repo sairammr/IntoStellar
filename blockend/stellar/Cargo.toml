@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "contracts/fusion_plus_escrow",
     "contracts/stellar_escrow_factory",
+    "contracts/stellar_limit_order_protocol",
 ]
 
 [workspace.dependencies]
