@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, String, xdr::{ScErrorCode, ScErrorType, ToXdr}, token::TokenClient,
+    contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, String, xdr::{ScErrorCode, ScErrorType, ToXdr, ScVal}, token::TokenClient, I256, TryFromVal,
 };
 
 #[contracttype]
@@ -233,12 +233,12 @@ impl StellarResolver {
     ) -> Result<(), Error> {
         // Use native XLM SAC for safety deposit transfer
         // The native asset address is the string "native"
-        let xlm = Address::from_string(&String::from_str(env, "native"));
-        let client = TokenClient::new(env, &xlm);
+        let native = Address::from_string(&String::from_str(env, "native"));
+        let token = TokenClient::new(env, &native);
         
         // Transfer safety deposit from resolver to escrow
         // This is equivalent to EVM's call{value: safetyDeposit}
-        client.transfer(&env.current_contract_address(), escrow_address, &(immutables.safety_deposit as i128));
+        token.transfer(&env.current_contract_address(), escrow_address, &(immutables.safety_deposit as i128));
         
         Ok(())
     }
