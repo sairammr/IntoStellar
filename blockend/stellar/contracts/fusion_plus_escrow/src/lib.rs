@@ -608,3 +608,6 @@ impl FusionPlusEscrow {
         env.crypto().keccak256(&bytes)
     }
 }
+
+#[cfg(test)]
+mod test;

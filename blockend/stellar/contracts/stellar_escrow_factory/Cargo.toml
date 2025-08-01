@@ -16,6 +16,7 @@ soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 [features]
 testutils = ["soroban-sdk/testutils"]
 
-[[bin]]
-name = "stellar_escrow_factory"
-path = "src/bin/stellar_escrow_factory.rs"
+# Binary target removed to avoid name collision with library target
+# [[bin]]
+# name = "stellar_escrow_factory"
+# path = "src/bin/stellar_escrow_factory.rs"

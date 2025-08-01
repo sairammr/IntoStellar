@@ -1,0 +1,13 @@
+[package]
+name = "test_swap_functionality"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+soroban-sdk = { version = "20.5.0", features = ["testutils"] }
+stellar_escrow_factory = { path = "../contracts/stellar_escrow_factory" }
+fusion_plus_escrow = { path = "../contracts/fusion_plus_escrow" }
+
+[[bin]]
+name = "test_swap_functionality"
+path = "src/main.rs" 

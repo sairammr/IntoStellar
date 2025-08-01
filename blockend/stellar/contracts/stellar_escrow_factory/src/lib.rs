@@ -329,3 +329,6 @@ impl StellarEscrowFactory {
         Ok(escrow_address)
     }
 }
+
+#[cfg(test)]
+mod test;

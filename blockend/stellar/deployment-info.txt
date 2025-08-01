@@ -1,0 +1,23 @@
+# Stellar Contracts Deployment Information
+# Generated on: Wed Aug  1 15:45:00 PDT 2024
+# Network: testnet
+# Identity: alice
+
+FUSION_PLUS_ESCROW_ID=CDNUQ6MGPSJKUSQNMJL5WCEMZ5SOLXHIYLDDJNZSDVMVUQTLAWCW4ZYW
+STELLAR_ESCROW_FACTORY_ID=CCG6LXUTIPXUUBY4HHZTHXMSRJVQRIDUFJLTUWPGLALIUMCRRQBLGXBA
+ESCROW_WASM_HASH=a99516dcb5b3c76678c20e864a7b439d3d8cf4d6a871cee2fa5c2baa22bf7a22
+ADMIN_ADDRESS=GAFVHOGVUA5A6WZAAMCAYCNHA6ZRLGJ2WFLARJWXHXP6QIJCEI56JMBQ
+
+# Relayer Configuration
+# Add these to your relayer config:
+# contracts.stellar.escrowFactory = "CCG6LXUTIPXUUBY4HHZTHXMSRJVQRIDUFJLTUWPGLALIUMCRRQBLGXBA"
+
+# Contract Explorer Links
+# FusionPlusEscrow: https://stellar.expert/explorer/testnet/contract/CDNUQ6MGPSJKUSQNMJL5WCEMZ5SOLXHIYLDDJNZSDVMVUQTLAWCW4ZYW
+# StellarEscrowFactory: https://stellar.expert/explorer/testnet/contract/CCG6LXUTIPXUUBY4HHZTHXMSRJVQRIDUFJLTUWPGLALIUMCRRQBLGXBA
+
+# Deployment Status: ✅ SUCCESSFUL
+# - FusionPlusEscrow deployed and ready
+# - StellarEscrowFactory deployed and initialized
+# - Admin address set correctly
+# - WASM hash configured properly 

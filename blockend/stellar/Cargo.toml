@@ -1,12 +1,12 @@
 [workspace]
 resolver = "2"
 members = [
-  "contracts/fusion_plus_escrow",
-  "contracts/stellar_escrow_factory"
+    "contracts/fusion_plus_escrow",
+    "contracts/stellar_escrow_factory",
 ]
 
 [workspace.dependencies]
-soroban-sdk = "20.0.0"
+soroban-sdk = "20.5.0"
 
 [profile.release]
 opt-level = "z"

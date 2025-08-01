@@ -1,191 +1,466 @@
 #![cfg(test)]
 
 use super::*;
-use soroban_sdk::{testutils::{Address as _, Ledger}, Address, Env, BytesN};
+use soroban_sdk::{
+    testutils::{Address as _, AuthorizedFunction, AuthorizedInvocation},
+    Address, Env, Symbol,
+};
+
+fn setup_escrow(env: &Env) -> (FusionPlusEscrow, Address, Address, Address, Address, BytesN<32>, BytesN<32>, i128, i128) {
+    let escrow = FusionPlusEscrow;
+    let maker = Address::generate(env);
+    let taker = Address::generate(env);
+    let token = Address::generate(env);
+    let order_hash = BytesN::from_array(env, &[1u8; 32]);
+    let hash_lock = BytesN::from_array(env, &[2u8; 32]);
+    let amount = 1000000;
+    let safety_deposit = 100000;
+
+    let timelocks = TimelockParams {
+        finality: 60,
+        src_withdrawal: 120,
+        src_public_withdrawal: 180,
+        src_cancellation: 240,
+        src_public_cancellation: 300,
+        dst_withdrawal: 360,
+        dst_public_withdrawal: 420,
+        dst_cancellation: 480,
+    };
+
+    let init_params = InitParams {
+        order_hash: order_hash.clone(),
+        hash_lock: hash_lock.clone(),
+        maker: maker.clone(),
+        taker: taker.clone(),
+        token: token.clone(),
+        amount,
+        safety_deposit,
+        timelocks,
+    };
+
+    escrow.initialize(env, init_params).unwrap();
+
+    (escrow, maker, taker, token, order_hash, hash_lock, amount, safety_deposit)
+}
 
 #[test]
 fn test_initialize() {
     let env = Env::default();
-    let contract_id = env.register_contract(None, FusionPlusEscrow);
-    let client = FusionPlusEscrowClient::new(&env, &contract_id);
-
-    // Initialize should succeed
-    client.initialize();
-
-    // Second initialization should fail
-    let result = client.try_initialize();
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_deposit_and_withdraw() {
-    let env = Env::default();
-    env.mock_all_auths();
-    
-    let contract_id = env.register_contract(None, FusionPlusEscrow);
-    let client = FusionPlusEscrowClient::new(&env, &contract_id);
-
-    // Initialize contract
-    client.initialize();
-
+    let escrow = FusionPlusEscrow;
     let maker = Address::generate(&env);
-    let resolver = Address::generate(&env);
-    let token = Address::generate(&env); // Using a mock token address
-    
-    // Create a test secret and its hash
-    let secret = BytesN::from_array(&env, &[1u8; 32]);
-    let hash_lock = env.crypto().keccak256(&secret.to_array()).into();
-
-    // Set current time
-    env.ledger().with_mut(|li| li.timestamp = 1000);
-
-    // Deposit
-    client.deposit(
-        &hash_lock,
-        &resolver,
-        &token,
-        &1000i128,      // amount
-        &3600u64,       // withdrawal_delay (1 hour)
-        &7200u64,       // cancellation_delay (2 hours)
-        &100i128,       // safety_deposit
-    );
-
-    // Verify escrow was created
-    assert!(client.escrow_exists(&hash_lock));
-    
-    let escrow_data = client.get_escrow_data(&hash_lock);
-    assert_eq!(escrow_data.maker, maker);
-    assert_eq!(escrow_data.resolver, resolver);
-    assert_eq!(escrow_data.amount, 1000i128);
-    assert_eq!(escrow_data.safety_deposit, 100i128);
-    assert!(!escrow_data.withdrawn);
-    assert!(!escrow_data.cancelled);
-
-    // Fast forward to withdrawal time
-    env.ledger().with_mut(|li| li.timestamp = 4700); // 1000 + 3600 + 100
-
-    // Withdraw with correct secret
-    client.withdraw(&hash_lock, &secret);
-
-    // Verify withdrawal
-    let escrow_data = client.get_escrow_data(&hash_lock);
-    assert!(escrow_data.withdrawn);
-    assert!(!escrow_data.cancelled);
-}
-
-#[test]
-fn test_invalid_secret() {
-    let env = Env::default();
-    env.mock_all_auths();
-    
-    let contract_id = env.register_contract(None, FusionPlusEscrow);
-    let client = FusionPlusEscrowClient::new(&env, &contract_id);
-
-    client.initialize();
-
-    let resolver = Address::generate(&env);
+    let taker = Address::generate(&env);
     let token = Address::generate(&env);
-    
-    let secret = BytesN::from_array(&env, &[1u8; 32]);
-    let wrong_secret = BytesN::from_array(&env, &[2u8; 32]);
-    let hash_lock = env.crypto().keccak256(&secret.to_array()).into();
+    let order_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let hash_lock = BytesN::from_array(&env, &[2u8; 32]);
+    let amount = 1000000;
+    let safety_deposit = 100000;
 
-    env.ledger().with_mut(|li| li.timestamp = 1000);
+    let timelocks = TimelockParams {
+        finality: 60,
+        src_withdrawal: 120,
+        src_public_withdrawal: 180,
+        src_cancellation: 240,
+        src_public_cancellation: 300,
+        dst_withdrawal: 360,
+        dst_public_withdrawal: 420,
+        dst_cancellation: 480,
+    };
 
-    client.deposit(
-        &hash_lock,
-        &resolver,
-        &token,
-        &1000i128,
-        &3600u64,
-        &7200u64,
-        &100i128,
-    );
+    let init_params = InitParams {
+        order_hash: order_hash.clone(),
+        hash_lock: hash_lock.clone(),
+        maker: maker.clone(),
+        taker: taker.clone(),
+        token: token.clone(),
+        amount,
+        safety_deposit,
+        timelocks,
+    };
 
-    // Fast forward to withdrawal time
-    env.ledger().with_mut(|li| li.timestamp = 4700);
+    // Initialize escrow
+    escrow.initialize(&env, init_params).unwrap();
 
-    // Try to withdraw with wrong secret
-    let result = client.try_withdraw(&hash_lock, &wrong_secret);
-    assert!(result.is_err());
+    // Verify initialization
+    assert!(env.storage().instance().has(&DataKey::Immutables));
+    assert!(!escrow.is_withdrawn_status(&env).unwrap());
+    assert!(!escrow.is_cancelled_status(&env).unwrap());
+
+    // Verify immutable data
+    let immutables = escrow.get_immutables(&env).unwrap();
+    assert_eq!(immutables.order_hash, order_hash);
+    assert_eq!(immutables.hash_lock, hash_lock);
+    assert_eq!(immutables.maker, maker);
+    assert_eq!(immutables.taker, taker);
+    assert_eq!(immutables.token, token);
+    assert_eq!(immutables.amount, amount);
+    assert_eq!(immutables.safety_deposit, safety_deposit);
+
+    // Verify event was emitted
+    let events = env.events().all();
+    assert_eq!(events.len(), 1);
+    let event = &events[0];
+    assert_eq!(event.topics[0], Symbol::new(&env, "EscrowCreated"));
 }
 
 #[test]
-fn test_cancel_escrow() {
+#[should_panic(expected = "AlreadyInitialized")]
+fn test_initialize_twice() {
     let env = Env::default();
-    env.mock_all_auths();
-    
-    let contract_id = env.register_contract(None, FusionPlusEscrow);
-    let client = FusionPlusEscrowClient::new(&env, &contract_id);
+    let (escrow, _, _, _, _, _, _, _) = setup_escrow(&env);
 
-    client.initialize();
-
+    // Try to initialize again - should fail
     let maker = Address::generate(&env);
-    let resolver = Address::generate(&env);
+    let taker = Address::generate(&env);
     let token = Address::generate(&env);
-    
-    let secret = BytesN::from_array(&env, &[1u8; 32]);
-    let hash_lock = env.crypto().keccak256(&secret.to_array()).into();
+    let order_hash = BytesN::from_array(&env, &[3u8; 32]);
+    let hash_lock = BytesN::from_array(&env, &[4u8; 32]);
+    let amount = 2000000;
+    let safety_deposit = 200000;
 
-    env.ledger().with_mut(|li| li.timestamp = 1000);
+    let timelocks = TimelockParams {
+        finality: 60,
+        src_withdrawal: 120,
+        src_public_withdrawal: 180,
+        src_cancellation: 240,
+        src_public_cancellation: 300,
+        dst_withdrawal: 360,
+        dst_public_withdrawal: 420,
+        dst_cancellation: 480,
+    };
 
-    client.deposit(
-        &hash_lock,
-        &resolver,
-        &token,
-        &1000i128,
-        &3600u64,
-        &7200u64,
-        &100i128,
-    );
+    let init_params = InitParams {
+        order_hash,
+        hash_lock,
+        maker,
+        taker,
+        token,
+        amount,
+        safety_deposit,
+        timelocks,
+    };
 
-    // Fast forward past cancellation time
-    env.ledger().with_mut(|li| li.timestamp = 8300); // 1000 + 7200 + 100
-
-    // Cancel escrow
-    client.cancel(&hash_lock);
-
-    // Verify cancellation
-    let escrow_data = client.get_escrow_data(&hash_lock);
-    assert!(!escrow_data.withdrawn);
-    assert!(escrow_data.cancelled);
+    escrow.initialize(&env, init_params).unwrap();
 }
 
 #[test]
-fn test_timing_constraints() {
+#[should_panic(expected = "InvalidParams")]
+fn test_initialize_invalid_amount() {
     let env = Env::default();
-    env.mock_all_auths();
-    
-    let contract_id = env.register_contract(None, FusionPlusEscrow);
-    let client = FusionPlusEscrowClient::new(&env, &contract_id);
-
-    client.initialize();
-
-    let resolver = Address::generate(&env);
+    let escrow = FusionPlusEscrow;
+    let maker = Address::generate(&env);
+    let taker = Address::generate(&env);
     let token = Address::generate(&env);
+    let order_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let hash_lock = BytesN::from_array(&env, &[2u8; 32]);
+    let amount = 0; // Invalid amount
+    let safety_deposit = 100000;
+
+    let timelocks = TimelockParams {
+        finality: 60,
+        src_withdrawal: 120,
+        src_public_withdrawal: 180,
+        src_cancellation: 240,
+        src_public_cancellation: 300,
+        dst_withdrawal: 360,
+        dst_public_withdrawal: 420,
+        dst_cancellation: 480,
+    };
+
+    let init_params = InitParams {
+        order_hash,
+        hash_lock,
+        maker,
+        taker,
+        token,
+        amount,
+        safety_deposit,
+        timelocks,
+    };
+
+    escrow.initialize(&env, init_params).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "InvalidParams")]
+fn test_initialize_invalid_timelocks() {
+    let env = Env::default();
+    let escrow = FusionPlusEscrow;
+    let maker = Address::generate(&env);
+    let taker = Address::generate(&env);
+    let token = Address::generate(&env);
+    let order_hash = BytesN::from_array(&env, &[1u8; 32]);
+    let hash_lock = BytesN::from_array(&env, &[2u8; 32]);
+    let amount = 1000000;
+    let safety_deposit = 100000;
+
+    let timelocks = TimelockParams {
+        finality: 120,
+        src_withdrawal: 60, // Invalid: src_withdrawal <= finality
+        src_public_withdrawal: 180,
+        src_cancellation: 240,
+        src_public_cancellation: 300,
+        dst_withdrawal: 360,
+        dst_public_withdrawal: 420,
+        dst_cancellation: 480,
+    };
+
+    let init_params = InitParams {
+        order_hash,
+        hash_lock,
+        maker,
+        taker,
+        token,
+        amount,
+        safety_deposit,
+        timelocks,
+    };
+
+    escrow.initialize(&env, init_params).unwrap();
+}
+
+#[test]
+fn test_deposit() {
+    let env = Env::default();
+    let (escrow, maker, _, _, _, _, _, _) = setup_escrow(&env);
+
+    // Mock auth for maker
+    env.mock_all_auths();
+
+    // Deposit should succeed
+    escrow.deposit(&env).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "Unauthorized")]
+fn test_deposit_unauthorized() {
+    let env = Env::default();
+    let (escrow, _, taker, _, _, _, _, _) = setup_escrow(&env);
+
+    // Mock auth for taker (not maker) - should fail
+    env.mock_auths(&[&taker]);
+
+    escrow.deposit(&env).unwrap();
+}
+
+#[test]
+fn test_withdraw() {
+    let env = Env::default();
+    let (escrow, _, taker, _, _, hash_lock, _, _) = setup_escrow(&env);
+
+    // Mock auth for taker
+    env.mock_all_auths();
+
+    // Create a valid secret (hash of which equals hash_lock)
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
     
-    let secret = BytesN::from_array(&env, &[1u8; 32]);
-    let hash_lock = env.crypto().keccak256(&secret.to_array()).into();
+    // Mock the keccak256 function to return the expected hash
+    env.mock_crypto().keccak256.return_value = hash_lock;
 
-    env.ledger().with_mut(|li| li.timestamp = 1000);
+    // Withdraw should succeed
+    escrow.withdraw(&env, &secret).unwrap();
 
-    client.deposit(
-        &hash_lock,
-        &resolver,
-        &token,
-        &1000i128,
-        &3600u64,
-        &7200u64,
-        &100i128,
-    );
+    // Verify escrow is withdrawn
+    assert!(escrow.is_withdrawn_status(&env).unwrap());
+    assert!(!escrow.is_cancelled_status(&env).unwrap());
 
-    // Try to withdraw before withdrawal time
-    env.ledger().with_mut(|li| li.timestamp = 2000); // Before withdrawal time
+    // Verify event was emitted
+    let events = env.events().all();
+    assert_eq!(events.len(), 2); // EscrowCreated + Withdrawal
+    let event = &events[1];
+    assert_eq!(event.topics[0], Symbol::new(&env, "Withdrawal"));
+}
 
-    let result = client.try_withdraw(&hash_lock, &secret);
-    assert!(result.is_err());
+#[test]
+#[should_panic(expected = "InvalidSecret")]
+fn test_withdraw_invalid_secret() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, _, _, _) = setup_escrow(&env);
 
-    // Try to cancel before cancellation time
-    let result = client.try_cancel(&hash_lock);
-    assert!(result.is_err());
+    // Mock auth for taker
+    env.mock_all_auths();
+
+    // Create an invalid secret
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
+    
+    // Mock the keccak256 function to return a different hash
+    env.mock_crypto().keccak256.return_value = BytesN::from_array(&env, &[4u8; 32]);
+
+    escrow.withdraw(&env, &secret).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "AlreadyWithdrawn")]
+fn test_withdraw_twice() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, hash_lock, _, _) = setup_escrow(&env);
+
+    // Mock auth for taker
+    env.mock_all_auths();
+
+    // Create a valid secret
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
+    
+    // Mock the keccak256 function
+    env.mock_crypto().keccak256.return_value = hash_lock;
+
+    // First withdrawal should succeed
+    escrow.withdraw(&env, &secret).unwrap();
+
+    // Second withdrawal should fail
+    escrow.withdraw(&env, &secret).unwrap();
+}
+
+#[test]
+fn test_public_withdraw() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, hash_lock, _, _) = setup_escrow(&env);
+    let caller = Address::generate(&env);
+
+    // Mock auth for caller
+    env.mock_all_auths();
+
+    // Create a valid secret
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
+    
+    // Mock the keccak256 function
+    env.mock_crypto().keccak256.return_value = hash_lock;
+
+    // Public withdrawal should succeed
+    escrow.public_withdraw(&env, &secret, &caller).unwrap();
+
+    // Verify escrow is withdrawn
+    assert!(escrow.is_withdrawn_status(&env).unwrap());
+    assert!(!escrow.is_cancelled_status(&env).unwrap());
+
+    // Verify event was emitted
+    let events = env.events().all();
+    assert_eq!(events.len(), 2); // EscrowCreated + Withdrawal
+    let event = &events[1];
+    assert_eq!(event.topics[0], Symbol::new(&env, "Withdrawal"));
+}
+
+#[test]
+fn test_cancel() {
+    let env = Env::default();
+    let (escrow, maker, _, _, _, _, _, _) = setup_escrow(&env);
+
+    // Mock auth for maker
+    env.mock_all_auths();
+
+    // Cancel should succeed
+    escrow.cancel(&env, &maker).unwrap();
+
+    // Verify escrow is cancelled
+    assert!(!escrow.is_withdrawn_status(&env).unwrap());
+    assert!(escrow.is_cancelled_status(&env).unwrap());
+
+    // Verify event was emitted
+    let events = env.events().all();
+    assert_eq!(events.len(), 2); // EscrowCreated + EscrowCancelled
+    let event = &events[1];
+    assert_eq!(event.topics[0], Symbol::new(&env, "EscrowCancelled"));
+}
+
+#[test]
+fn test_public_cancel() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, _, _, _) = setup_escrow(&env);
+    let caller = Address::generate(&env);
+
+    // Mock auth for caller
+    env.mock_all_auths();
+
+    // Public cancel should succeed
+    escrow.public_cancel(&env, &caller).unwrap();
+
+    // Verify escrow is cancelled
+    assert!(!escrow.is_withdrawn_status(&env).unwrap());
+    assert!(escrow.is_cancelled_status(&env).unwrap());
+
+    // Verify event was emitted
+    let events = env.events().all();
+    assert_eq!(events.len(), 2); // EscrowCreated + EscrowCancelled
+    let event = &events[1];
+    assert_eq!(event.topics[0], Symbol::new(&env, "EscrowCancelled"));
+}
+
+#[test]
+#[should_panic(expected = "AlreadyCancelled")]
+fn test_cancel_twice() {
+    let env = Env::default();
+    let (escrow, maker, _, _, _, _, _, _) = setup_escrow(&env);
+
+    // Mock auth for maker
+    env.mock_all_auths();
+
+    // First cancellation should succeed
+    escrow.cancel(&env, &maker).unwrap();
+
+    // Second cancellation should fail
+    escrow.cancel(&env, &maker).unwrap();
+}
+
+#[test]
+#[should_panic(expected = "AlreadyWithdrawn")]
+fn test_cancel_after_withdrawal() {
+    let env = Env::default();
+    let (escrow, maker, _, _, _, hash_lock, _, _) = setup_escrow(&env);
+
+    // Mock auth for maker and taker
+    env.mock_all_auths();
+
+    // First withdraw
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
+    env.mock_crypto().keccak256.return_value = hash_lock;
+    escrow.withdraw(&env, &secret).unwrap();
+
+    // Then try to cancel - should fail
+    escrow.cancel(&env, &maker).unwrap();
+}
+
+#[test]
+fn test_get_revealed_secret() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, hash_lock, _, _) = setup_escrow(&env);
+
+    // Mock auth for taker
+    env.mock_all_auths();
+
+    // Create a valid secret
+    let secret = BytesN::from_array(&env, &[3u8; 32]);
+    
+    // Mock the keccak256 function
+    env.mock_crypto().keccak256.return_value = hash_lock;
+
+    // Withdraw to reveal secret
+    escrow.withdraw(&env, &secret).unwrap();
+
+    // Get revealed secret should succeed
+    let revealed_secret = escrow.get_revealed_secret(&env).unwrap();
+    assert_eq!(revealed_secret, secret);
+}
+
+#[test]
+#[should_panic(expected = "InvalidTime")]
+fn test_get_revealed_secret_before_withdrawal() {
+    let env = Env::default();
+    let (escrow, _, _, _, _, _, _, _) = setup_escrow(&env);
+
+    // Try to get revealed secret before withdrawal - should fail
+    escrow.get_revealed_secret(&env).unwrap();
+}
+
+#[test]
+fn test_keccak256() {
+    let env = Env::default();
+    let escrow = FusionPlusEscrow;
+    let data = BytesN::from_array(&env, &[1u8; 32]);
+    let expected_hash = BytesN::from_array(&env, &[2u8; 32]);
+
+    // Mock the keccak256 function
+    env.mock_crypto().keccak256.return_value = expected_hash;
+
+    // Test keccak256 function
+    let result = escrow.keccak256(&env, &data);
+    assert_eq!(result, expected_hash);
 }

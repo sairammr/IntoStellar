@@ -16,6 +16,7 @@ soroban-sdk = { version = "20.0.0", features = ["testutils"] }
 [features]
 testutils = ["soroban-sdk/testutils"]
 
-[[bin]]
-name = "fusion_plus_escrow"
-path = "src/bin/fusion_plus_escrow.rs"
+# Binary target removed to avoid name collision with library target
+# [[bin]]
+# name = "fusion_plus_escrow"
+# path = "src/bin/fusion_plus_escrow.rs"
