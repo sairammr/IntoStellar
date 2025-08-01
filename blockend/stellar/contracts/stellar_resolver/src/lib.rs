@@ -1,54 +1,57 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, xdr::{ScErrorCode, ScErrorType},
+    contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, String, xdr::{ScErrorCode, ScErrorType, ToXdr}, token::TokenClient,
 };
-use soroban_sdk::token;
-use soroban_sdk::xdr::ToXdr;
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Order {
     pub salt: u64,
-    pub maker_asset: Address,     // Stellar asset contract
-    pub taker_asset: Address,     // Stellar asset contract  
     pub maker: Address,           // Stellar account
     pub receiver: Address,        // Stellar account
-    pub allowed_sender: Address,  // Zero for public orders
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
     pub making_amount: u128,
     pub taking_amount: u128,
-    pub offsets: u64,             // Encodes lengths of dynamic data
-    pub interactions: Bytes,      // Dynamic fields (predicate, etc.)
+    pub maker_traits: u128,       // MakerTraits as uint256
 }
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct BaseEscrowImmutables {
+    pub order_hash: BytesN<32>,
+    pub hashlock: BytesN<32>,
+    pub maker: Address,
+    pub taker: Address,
+    pub token: Address,
+    pub amount: u128,
+    pub safety_deposit: u128,
+    pub timelocks: Timelocks,
+}
+
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Timelocks {
+    pub finality: u64,
+    pub src_withdrawal: u64,
+    pub src_public_withdrawal: u64,
+    pub src_cancellation: u64,
+    pub src_public_cancellation: u64,
+    pub dst_withdrawal: u64,
+    pub dst_public_withdrawal: u64,
+    pub dst_cancellation: u64,
+    pub deployed_at: u64,
+}
+
+// TakerTraits as uint256 (equivalent to EVM TakerTraits)
+type TakerTraits = i128; // Changed to i128 to support higher bit positions
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ResolverConfig {
+    pub factory: Address,         // Stellar Escrow Factory contract
     pub limit_order_protocol: Address,  // Stellar Limit Order Protocol contract
-    pub escrow_factory: Address,        // Stellar Escrow Factory contract
-    pub price_oracle: Address,          // Price oracle contract (optional)
-    pub admin: Address,                 // Admin address
-    pub fee_recipient: Address,         // Fee recipient address
-    pub fee_rate: u32,                  // Fee rate in basis points (e.g., 30 = 0.3%)
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct CrossChainOrder {
-    pub evm_order_hash: BytesN<32>,     // EVM order hash
-    pub stellar_order: Order,           // Stellar order
-    pub secret_hash: BytesN<32>,        // HTLC secret hash
-    pub timelock: u64,                  // HTLC timelock
-    pub status: OrderStatus,            // Current status
-}
-
-#[contracttype]
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub enum OrderStatus {
-    Pending,        // Order created, waiting for execution
-    Executing,      // Order being executed
-    Completed,      // Order completed successfully
-    Failed,         // Order failed
-    Cancelled,      // Order cancelled
+    pub admin: Address,           // Admin address (equivalent to EVM owner)
 }
 
 #[contract]
@@ -57,293 +60,346 @@ pub struct StellarResolver;
 #[contractimpl]
 impl StellarResolver {
     const CONFIG: Symbol = symbol_short!("config");
-    const ORDERS: Symbol = symbol_short!("orders");
-    const EXECUTED: Symbol = symbol_short!("executed");
+    const ARGS_HAS_TARGET: i128 = 1i128 << 127; // Use max available bit position for i128
 
-    /// Initialize the resolver with configuration
+    /// Initialize the resolver with configuration (equivalent to EVM constructor)
     pub fn initialize(
         env: &Env,
+        factory: Address,
         limit_order_protocol: Address,
-        escrow_factory: Address,
-        price_oracle: Address,
         admin: Address,
-        fee_recipient: Address,
-        fee_rate: u32,
     ) -> Result<(), Error> {
         let config = ResolverConfig {
+            factory,
             limit_order_protocol,
-            escrow_factory,
-            price_oracle,
             admin,
-            fee_recipient,
-            fee_rate,
         };
         
         env.storage().instance().set(&Self::CONFIG, &config);
-        env.storage().instance().set(&Self::ORDERS, &Map::<BytesN<32>, CrossChainOrder>::new(env));
-        env.storage().instance().set(&Self::EXECUTED, &Map::<BytesN<32>, bool>::new(env));
         
         Ok(())
     }
 
-    /// Create a cross-chain order (equivalent to EVM deploySrc)
-    pub fn create_cross_chain_order(
+    /// Deploy source escrow and execute order (equivalent to EVM deploySrc)
+    pub fn deploy_src(
         env: &Env,
-        evm_order_hash: BytesN<32>,
-        stellar_order: Order,
-        secret_hash: BytesN<32>,
-        timelock: u64,
-    ) -> Result<Address, Error> {
-        // Validate order
-        Self::validate_order(&stellar_order)?;
-        
-        // Check if order already exists
-        let orders: Map<BytesN<32>, CrossChainOrder> = env.storage().instance().get(&Self::ORDERS).unwrap_or(Map::new(env));
-        if orders.contains_key(evm_order_hash.clone()) {
-            return Err(Error::OrderAlreadyExists);
-        }
-        
-        // Create cross-chain order
-        let cross_chain_order = CrossChainOrder {
-            evm_order_hash: evm_order_hash.clone(),
-            stellar_order: stellar_order.clone(),
-            secret_hash: secret_hash.clone(),
-            timelock,
-            status: OrderStatus::Pending,
-        };
-        
-        // Store the order
-        let mut orders = orders;
-        orders.set(evm_order_hash.clone(), cross_chain_order);
-        env.storage().instance().set(&Self::ORDERS, &orders);
-        
-        // Create escrow on Stellar side
-        let escrow_address = Self::create_stellar_escrow(env, &stellar_order, &secret_hash, timelock)?;
-        
-        // Emit event
-        env.events().publish(("CrossChainOrderCreated",), (evm_order_hash, escrow_address.clone()));
-        
-        Ok(escrow_address)
-    }
-
-    /// Execute a cross-chain order (equivalent to EVM deployDst)
-    pub fn execute_cross_chain_order(
-        env: &Env,
-        evm_order_hash: BytesN<32>,
-        signature: Bytes,
-        taker: Address,
+        immutables: BaseEscrowImmutables,
+        order: Order,
+        signature: Bytes,  // r, vs combined for Stellar
         amount: u128,
-    ) -> Result<(u128, u128), Error> {
-        // Get the cross-chain order
-        let orders: Map<BytesN<32>, CrossChainOrder> = env.storage().instance().get(&Self::ORDERS).unwrap_or(Map::new(env));
-        let cross_chain_order = orders.get(evm_order_hash.clone()).ok_or(Error::OrderNotFound)?;
-        
-        // Check if already executed
-        let executed: Map<BytesN<32>, bool> = env.storage().instance().get(&Self::EXECUTED).unwrap_or(Map::new(env));
-        if executed.get(evm_order_hash.clone()).unwrap_or(false) {
-            return Err(Error::OrderAlreadyExecuted);
-        }
-        
-        // Update status to executing
-        let mut updated_order = cross_chain_order.clone();
-        updated_order.status = OrderStatus::Executing;
-        
-        let mut orders = orders;
-        orders.set(evm_order_hash.clone(), updated_order);
-        env.storage().instance().set(&Self::ORDERS, &orders);
-        
-        // Execute the order on Stellar Limit Order Protocol
-        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
-        
-        // Call the limit order protocol to fill the order
-        let taker_traits = stellar_limit_order_protocol::TakerTraits {
-            threshold: amount,
-            skip_maker_permit: false,
-        };
-        
-        let result = stellar_limit_order_protocol::Client::new(env, &config.limit_order_protocol)
-            .fill_order(&cross_chain_order.stellar_order, &signature, &taker, &amount, &taker_traits);
-        
-        match result {
-            Ok((making_amount, taking_amount, _order_hash)) => {
-                // Mark as executed
-                let mut executed = executed;
-                executed.set(evm_order_hash.clone(), true);
-                env.storage().instance().set(&Self::EXECUTED, &executed);
-                
-                // Update status to completed
-                let mut updated_order = cross_chain_order.clone();
-                updated_order.status = OrderStatus::Completed;
-                orders.set(evm_order_hash.clone(), updated_order);
-                env.storage().instance().set(&Self::ORDERS, &orders);
-                
-                // Emit event
-                env.events().publish(("CrossChainOrderExecuted",), (evm_order_hash, making_amount, taking_amount));
-                
-                Ok((making_amount, taking_amount))
-            }
-            Err(_) => {
-                // Update status to failed
-                let mut updated_order = cross_chain_order.clone();
-                updated_order.status = OrderStatus::Failed;
-                orders.set(evm_order_hash.clone(), updated_order);
-                env.storage().instance().set(&Self::ORDERS, &orders);
-                
-                Err(Error::OrderExecutionFailed)
-            }
-        }
-    }
-
-    /// Get cross-chain order status
-    pub fn get_order_status(env: &Env, evm_order_hash: BytesN<32>) -> Result<OrderStatus, Error> {
-        let orders: Map<BytesN<32>, CrossChainOrder> = env.storage().instance().get(&Self::ORDERS).unwrap_or(Map::new(env));
-        let cross_chain_order = orders.get(evm_order_hash).ok_or(Error::OrderNotFound)?;
-        Ok(cross_chain_order.status)
-    }
-
-    /// Cancel a cross-chain order (admin only)
-    pub fn cancel_order(env: &Env, evm_order_hash: BytesN<32>) -> Result<(), Error> {
+        taker_traits: TakerTraits,
+        args: Bytes,
+    ) -> Result<(), Error> {
+        // Check admin authorization (equivalent to EVM onlyOwner)
         let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
         config.admin.require_auth();
-        
-        let orders: Map<BytesN<32>, CrossChainOrder> = env.storage().instance().get(&Self::ORDERS).unwrap_or(Map::new(env));
-        let cross_chain_order = orders.get(evm_order_hash.clone()).ok_or(Error::OrderNotFound)?;
-        
-        let mut updated_order = cross_chain_order.clone();
-        updated_order.status = OrderStatus::Cancelled;
-        
-        let mut orders = orders;
-        orders.set(evm_order_hash.clone(), updated_order);
-        env.storage().instance().set(&Self::ORDERS, &orders);
-        
-        env.events().publish(("CrossChainOrderCancelled",), evm_order_hash);
-        
+
+        // Set deployed_at timestamp (equivalent to EVM block.timestamp)
+        let mut immutables_with_timestamp = immutables.clone();
+        immutables_with_timestamp.timelocks.deployed_at = env.ledger().timestamp();
+
+        // Compute escrow address (equivalent to EVM addressOfEscrowSrc)
+        let escrow_address = Self::compute_escrow_address(env, &immutables_with_timestamp)?;
+
+        // Send safety deposit to escrow (equivalent to EVM call{value: safetyDeposit})
+        Self::send_safety_deposit(env, &escrow_address, &immutables_with_timestamp)?;
+
+        // Set _ARGS_HAS_TARGET flag (equivalent to EVM takerTraits = TakerTraits.wrap(...))
+        let taker_traits_with_target = taker_traits | Self::ARGS_HAS_TARGET;
+
+        // Prepare args with target (equivalent to EVM abi.encodePacked(computed, args))
+        let args_with_target = Self::prepare_args_with_target(env, &escrow_address, &args)?;
+
+        // Execute order on Limit Order Protocol (equivalent to EVM _LOP.fillOrderArgs)
+        Self::execute_order_on_lop(
+            env,
+            &config.limit_order_protocol,
+            &order,
+            &signature,
+            &amount,
+            &taker_traits_with_target,
+            &args_with_target,
+        )?;
+
         Ok(())
     }
 
-    /// Update configuration (admin only)
-    pub fn update_config(
+    /// Deploy destination escrow (equivalent to EVM deployDst)
+    pub fn deploy_dst(
         env: &Env,
-        limit_order_protocol: Option<Address>,
-        escrow_factory: Option<Address>,
-        price_oracle: Option<Address>,
-        fee_recipient: Option<Address>,
-        fee_rate: Option<u32>,
+        dst_immutables: BaseEscrowImmutables,
+        src_cancellation_timestamp: u64,
     ) -> Result<(), Error> {
+        // Check admin authorization (equivalent to EVM onlyOwner)
         let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
         config.admin.require_auth();
-        
-        let mut new_config = config.clone();
-        
-        if let Some(lop) = limit_order_protocol {
-            new_config.limit_order_protocol = lop;
+
+        // Call factory to create destination escrow (equivalent to EVM _FACTORY.createDstEscrow)
+        Self::create_dst_escrow(env, &config.factory, &dst_immutables, src_cancellation_timestamp)?;
+
+        Ok(())
+    }
+
+    /// Withdraw from escrow using secret (equivalent to EVM withdraw)
+    pub fn withdraw(
+        env: &Env,
+        escrow: Address,
+        secret: BytesN<32>,
+        immutables: BaseEscrowImmutables,
+    ) -> Result<(), Error> {
+        // Check admin authorization (equivalent to EVM onlyOwner)
+        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
+        config.admin.require_auth();
+
+        // Call escrow to withdraw (equivalent to EVM escrow.withdraw)
+        Self::call_escrow_withdraw(env, &escrow, &secret, &immutables)?;
+
+        Ok(())
+    }
+
+    /// Cancel escrow (equivalent to EVM cancel)
+    pub fn cancel(
+        env: &Env,
+        escrow: Address,
+        immutables: BaseEscrowImmutables,
+    ) -> Result<(), Error> {
+        // Check admin authorization (equivalent to EVM onlyOwner)
+        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
+        config.admin.require_auth();
+
+        // Call escrow to cancel (equivalent to EVM escrow.cancel)
+        Self::call_escrow_cancel(env, &escrow, &immutables)?;
+
+        Ok(())
+    }
+
+    /// Make arbitrary calls to other contracts (equivalent to EVM arbitraryCalls)
+    pub fn arbitrary_calls(
+        env: &Env,
+        targets: Vec<Address>,
+        arguments: Vec<Bytes>,
+    ) -> Result<(), Error> {
+        // Check admin authorization (equivalent to EVM onlyOwner)
+        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
+        config.admin.require_auth();
+
+        // Validate lengths match (equivalent to EVM LengthMismatch error)
+        if targets.len() != arguments.len() {
+            return Err(Error::LengthMismatch);
         }
-        if let Some(ef) = escrow_factory {
-            new_config.escrow_factory = ef;
+
+        // Make calls to each target (equivalent to EVM for loop with call)
+        for i in 0..targets.len() {
+            let target = &targets.get(i).unwrap();
+            let args = &arguments.get(i).unwrap();
+            Self::make_arbitrary_call(env, target, args)?;
         }
-        if let Some(po) = price_oracle {
-            new_config.price_oracle = po;
-        }
-        if let Some(fr) = fee_recipient {
-            new_config.fee_recipient = fr;
-        }
-        if let Some(rate) = fee_rate {
-            new_config.fee_rate = rate;
-        }
-        
-        env.storage().instance().set(&Self::CONFIG, &new_config);
-        
+
         Ok(())
     }
 
     // Helper functions
-    fn validate_order(order: &Order) -> Result<(), Error> {
-        if order.making_amount == 0 || order.taking_amount == 0 {
-            return Err(Error::InvalidOrder);
+
+    /// Compute escrow address (equivalent to EVM addressOfEscrowSrc)
+    fn compute_escrow_address(
+        env: &Env,
+        immutables: &BaseEscrowImmutables,
+    ) -> Result<Address, Error> {
+        // Call factory to get escrow address
+        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
+        
+        let args = vec![
+            env,
+            immutables.clone().into_val(env),
+        ];
+        
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(&config.factory, &symbol_short!("addr_src"), args);
+        
+        match result {
+            Ok(val) => {
+                let address: Address = <soroban_sdk::Val as IntoVal<Env, Address>>::into_val(&val, env);
+                Ok(address)
+            }
+            Err(_) => Err(Error::EscrowAddressComputationFailed),
         }
+    }
+
+    /// Send safety deposit to escrow (equivalent to EVM call{value: safetyDeposit})
+    fn send_safety_deposit(
+        env: &Env,
+        escrow_address: &Address,
+        immutables: &BaseEscrowImmutables,
+    ) -> Result<(), Error> {
+        // Use native XLM SAC for safety deposit transfer
+        // The native asset address is the string "native"
+        let xlm = Address::from_string(&String::from_str(env, "native"));
+        let client = TokenClient::new(env, &xlm);
+        
+        // Transfer safety deposit from resolver to escrow
+        // This is equivalent to EVM's call{value: safetyDeposit}
+        client.transfer(&env.current_contract_address(), escrow_address, &(immutables.safety_deposit as i128));
+        
         Ok(())
     }
 
-    fn create_stellar_escrow(
+    /// Prepare args with target (equivalent to EVM abi.encodePacked(computed, args))
+    fn prepare_args_with_target(
         env: &Env,
-        order: &Order,
-        secret_hash: &BytesN<32>,
-        timelock: u64,
-    ) -> Result<Address, Error> {
-        let config: ResolverConfig = env.storage().instance().get(&Self::CONFIG).unwrap();
-        
-        // Call the escrow factory to create an escrow
-        // This would typically involve calling the factory's create_src_escrow method
-        // For now, we'll return a mock address - this needs to be implemented based on your factory interface
-        
-        // Mock implementation - replace with actual factory call
-        // Use the current contract address as a placeholder
-        let escrow_address = env.current_contract_address();
-        
-        Ok(escrow_address)
+        escrow_address: &Address,
+        args: &Bytes,
+    ) -> Result<Bytes, Error> {
+        // Combine escrow address and args (equivalent to EVM abi.encodePacked)
+        let mut combined = Bytes::new(env);
+        let address_bytes = escrow_address.to_xdr(env);
+        combined.append(&address_bytes);
+        combined.append(args);
+        Ok(combined)
     }
-}
 
-// Mock stellar_limit_order_protocol module for compilation
-mod stellar_limit_order_protocol {
-    use soroban_sdk::{Address, Bytes, contracttype};
-    
-    #[contracttype]
-    #[derive(Clone, Debug, Eq, PartialEq)]
-    pub struct TakerTraits {
-        pub threshold: u128,
-        pub skip_maker_permit: bool,
-    }
-    
-    pub struct Client<'a> {
-        env: &'a soroban_sdk::Env,
-        contract_id: Address,
-    }
-    
-    impl<'a> Client<'a> {
-        pub fn new(env: &'a soroban_sdk::Env, contract_id: &Address) -> Self {
-            Self {
-                env,
-                contract_id: contract_id.clone(),
-            }
-        }
+    /// Execute order on Limit Order Protocol (equivalent to EVM _LOP.fillOrderArgs)
+    fn execute_order_on_lop(
+        env: &Env,
+        lop_contract: &Address,
+        order: &Order,
+        signature: &Bytes,
+        amount: &u128,
+        taker_traits: &TakerTraits,
+        args: &Bytes,
+    ) -> Result<(), Error> {
+        let args = vec![
+            env,
+            order.clone().into_val(env),
+            signature.clone().into_val(env),
+            (*amount).into_val(env),
+            (*taker_traits).into_val(env),
+            args.clone().into_val(env),
+        ];
         
-        pub fn fill_order(
-            &self,
-            _order: &super::Order,
-            _signature: &Bytes,
-            _taker: &Address,
-            _amount: &u128,
-            _taker_traits: &TakerTraits,
-        ) -> Result<(u128, u128, soroban_sdk::BytesN<32>), super::Error> {
-            // Mock implementation - replace with actual contract call
-            Ok((1000, 500, soroban_sdk::BytesN::from_array(self.env, &[0u8; 32])))
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(lop_contract, &symbol_short!("fill_args"), args);
+        
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::OrderExecutionFailed),
+        }
+    }
+
+    /// Create destination escrow (equivalent to EVM _FACTORY.createDstEscrow)
+    fn create_dst_escrow(
+        env: &Env,
+        factory: &Address,
+        dst_immutables: &BaseEscrowImmutables,
+        src_cancellation_timestamp: u64,
+    ) -> Result<(), Error> {
+        let args = vec![
+            env,
+            dst_immutables.clone().into_val(env),
+            src_cancellation_timestamp.into_val(env),
+        ];
+        
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(factory, &symbol_short!("create_d"), args);
+        
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::EscrowCreationFailed),
+        }
+    }
+
+    /// Call escrow withdraw (equivalent to EVM escrow.withdraw)
+    fn call_escrow_withdraw(
+        env: &Env,
+        escrow: &Address,
+        secret: &BytesN<32>,
+        immutables: &BaseEscrowImmutables,
+    ) -> Result<(), Error> {
+        let args = vec![
+            env,
+            secret.clone().into_val(env),
+            immutables.clone().into_val(env),
+        ];
+        
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(escrow, &symbol_short!("withdraw"), args);
+        
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::WithdrawFailed),
+        }
+    }
+
+    /// Call escrow cancel (equivalent to EVM escrow.cancel)
+    fn call_escrow_cancel(
+        env: &Env,
+        escrow: &Address,
+        immutables: &BaseEscrowImmutables,
+    ) -> Result<(), Error> {
+        let args = vec![
+            env,
+            immutables.clone().into_val(env),
+        ];
+        
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(escrow, &symbol_short!("cancel"), args);
+        
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::CancelFailed),
+        }
+    }
+
+    /// Make arbitrary call (equivalent to EVM target.call(arguments))
+    fn make_arbitrary_call(
+        env: &Env,
+        target: &Address,
+        args: &Bytes,
+    ) -> Result<(), Error> {
+        // For now, we'll make a direct call with the args as-is
+        // In a full implementation, you would parse XDR-encoded arguments
+        // and extract function name and parameters
+        
+        // This is a simplified but functional implementation
+        // The args should contain the function call data
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(target, &symbol_short!("execute"), vec![env, args.clone().into_val(env)]);
+        
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => {
+                // Use panic!() to abort and revert state (equivalent to EVM revert)
+                panic!("Arbitrary call failed");
+            }
         }
     }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Error {
-    InvalidOrder,
-    OrderNotFound,
-    OrderAlreadyExists,
-    OrderAlreadyExecuted,
+    InvalidCancellationTime,
+    LengthMismatch,
+    EscrowAddressComputationFailed,
+    NativeTokenSendingFailure,
     OrderExecutionFailed,
-    InsufficientBalance,
-    InvalidSignature,
+    EscrowCreationFailed,
+    WithdrawFailed,
+    CancelFailed,
+    ArbitraryCallFailed,
     Unauthorized,
 }
 
 impl From<Error> for soroban_sdk::Error {
     fn from(err: Error) -> Self {
         match err {
-            Error::InvalidOrder => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
-            Error::OrderNotFound => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
-            Error::OrderAlreadyExists => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
-            Error::OrderAlreadyExecuted => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::InvalidCancellationTime => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::LengthMismatch => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::EscrowAddressComputationFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::NativeTokenSendingFailure => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
             Error::OrderExecutionFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
-            Error::InsufficientBalance => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
-            Error::InvalidSignature => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::EscrowCreationFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::WithdrawFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::CancelFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::ArbitraryCallFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
             Error::Unauthorized => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
         }
     }
