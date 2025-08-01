@@ -7,6 +7,7 @@ import cors from "cors";
 import { Logger } from "../utils/Logger";
 
 import { RelayerService } from "../services/RelayerService";
+import swapRoutes from "./routes/swap";
 
 export interface RelayerAPIConfig {
   port: number;
@@ -50,6 +51,9 @@ export class RelayerAPI {
       });
       next();
     });
+
+    // Mount swap routes
+    this.app.use("/api", swapRoutes);
   }
 
   /**

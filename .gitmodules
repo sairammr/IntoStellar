@@ -1,3 +1,0 @@
-[submodule "blockend/evm/contracts/lib/cross-chain-swap"]
-	path = blockend/evm/contracts/lib/cross-chain-swap
-	url = https://github.com/1inch/cross-chain-swap
