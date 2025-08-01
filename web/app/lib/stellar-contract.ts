@@ -1,5 +1,6 @@
 import { rpc, xdr, TransactionBuilder, Networks } from "@stellar/stellar-sdk";
 import { signTransaction } from "./stellar-wallets-kit";
+import * as Client from "../packages/hello_world/dist";
 
 // Contract configuration
 const FACTORY_CONTRACT_ID =
@@ -39,6 +40,15 @@ export class StellarContractClient {
     this.publicKey = publicKey;
   }
 
+  async hello() {
+    const client = new Client.Client({
+      ...Client.networks.testnet,
+      rpcUrl: 'https://soroban-testnet.stellar.org:443',
+    });
+    const result = await client.hello({ to: 'hello' });
+    return result;
+
+  }
   private async getAccount() {
     if (!this.publicKey) {
       throw new Error("Public key not set. Please connect wallet first.");
