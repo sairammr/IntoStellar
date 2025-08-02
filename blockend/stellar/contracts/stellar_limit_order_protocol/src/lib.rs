@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, String, xdr::{ScErrorCode, ScErrorType}, I256,
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, String, xdr::{ScErrorCode, ScErrorType}, I256, IntoVal, vec, Vec,
 };
 use soroban_sdk::token;
 use soroban_sdk::xdr::ToXdr;
@@ -34,6 +34,20 @@ pub struct ResolverOrder {
     pub maker_traits: u128,       // MakerTraits as uint256
 }
 
+// Factory-compatible Order structure (matching Factory's Order struct)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FactoryOrder {
+    pub salt: u64,
+    pub maker: Address,           // Stellar account
+    pub receiver: Address,        // Stellar account
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
+    pub making_amount: u128,
+    pub taking_amount: u128,
+    pub maker_traits: u128,       // MakerTraits as uint256
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TakerTraits {
@@ -48,6 +62,7 @@ pub struct StellarLimitOrderProtocol;
 impl StellarLimitOrderProtocol {
     const REMAINING_INVALIDATOR: Symbol = symbol_short!("rem_inv");
     const ORDERS: Symbol = symbol_short!("orders");
+    const FACTORY: Symbol = symbol_short!("factory");  // Add factory storage
 
     // Constants matching EVM side
     const ORDER_TYPE_HASH: &'static [u8] = b"Order(uint256 salt,address makerAsset,address takerAsset,address maker,address receiver,address allowedSender,uint256 makingAmount,uint256 takingAmount,uint256 offsets,bytes interactions)";
@@ -55,9 +70,10 @@ impl StellarLimitOrderProtocol {
     const DOMAIN_VERSION: &'static [u8] = b"4";
 
     /// Initialize the contract
-    pub fn initialize(env: &Env) -> Result<(), Error> {
+    pub fn initialize(env: &Env, factory: Address) -> Result<(), Error> {
         env.storage().instance().set(&Self::REMAINING_INVALIDATOR, &Map::<BytesN<32>, u128>::new(env));
         env.storage().instance().set(&Self::ORDERS, &Map::<BytesN<32>, Order>::new(env));
+        env.storage().instance().set(&Self::FACTORY, &factory);  // Store factory address
         Ok(())
     }
 
@@ -116,7 +132,7 @@ impl StellarLimitOrderProtocol {
         args: Bytes,         // Cross-chain args
     ) -> Result<(), Error> {
         // Convert ResolverOrder to LOP Order
-        let order = Self::convert_resolver_order(env, resolver_order)?;
+        let order = Self::convert_resolver_order(env, resolver_order.clone())?;
         
         // Extract taker from args (first 32 bytes if _ARGS_HAS_TARGET is set)
         let taker = Self::extract_taker_from_args(env, &taker_traits, &args)?;
@@ -125,10 +141,13 @@ impl StellarLimitOrderProtocol {
         let taker_traits_struct = Self::convert_taker_traits(env, &taker_traits)?;
         
         // Call the existing fill_order function
-        let _result = Self::fill_order(env, order, signature, taker, amount, taker_traits_struct)?;
+        let (making_amount, taking_amount, order_hash) = Self::fill_order(env, order.clone(), signature.clone(), taker.clone(), amount, taker_traits_struct)?;
         
         // Process cross-chain args if needed
         Self::process_cross_chain_args(env, &args)?;
+        
+        // INTEGRATION: Call factory post_interaction after successful order execution
+        Self::call_factory_post_interaction(env, &resolver_order, &order_hash, &taker, making_amount, taking_amount, &args)?;
         
         Ok(())
     }
@@ -298,6 +317,54 @@ impl StellarLimitOrderProtocol {
             env.events().publish(("CrossChainArgs",), (args.clone(),));
         }
         Ok(())
+    }
+
+    /// INTEGRATION: Call factory post_interaction after successful order execution
+    fn call_factory_post_interaction(
+        env: &Env,
+        resolver_order: &ResolverOrder,
+        order_hash: &BytesN<32>,
+        taker: &Address,
+        making_amount: u128,
+        taking_amount: u128,
+        args: &Bytes,
+    ) -> Result<(), Error> {
+        // Get factory address from storage
+        let factory: Address = env.storage().instance().get(&Self::FACTORY)
+            .ok_or(Error::InvalidArgs)?; // Factory not set
+
+        // Convert ResolverOrder to Factory Order format
+        let factory_order = FactoryOrder {
+            salt: resolver_order.salt,
+            maker: resolver_order.maker.clone(),
+            receiver: resolver_order.receiver.clone(),
+            maker_asset: resolver_order.maker_asset.clone(),
+            taker_asset: resolver_order.taker_asset.clone(),
+            making_amount: resolver_order.making_amount,
+            taking_amount: resolver_order.taking_amount,
+            maker_traits: resolver_order.maker_traits,
+        };
+
+        // Call factory.post_interaction with proper parameters
+        let call_args = vec![
+            env,
+            factory_order.into_val(env),
+            Bytes::new(env).into_val(env), // extension (empty for now)
+            order_hash.clone().into_val(env),
+            taker.clone().into_val(env),
+            making_amount.into_val(env),
+            taking_amount.into_val(env),
+            taking_amount.into_val(env), // remaining_making_amount (same as taking_amount for full fill)
+            args.clone().into_val(env),
+        ];
+
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(&factory, &Symbol::new(env, "post_interaction"), call_args);
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::TransferFailed), // Use TransferFailed for factory call failure
+        }
     }
 }
 
