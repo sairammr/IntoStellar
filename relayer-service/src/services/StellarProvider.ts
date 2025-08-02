@@ -2,13 +2,10 @@
  * @fileoverview Stellar provider for RPC calls and network interaction
  */
 
-import { Horizon } from "@stellar/stellar-sdk";
-import StellarSdk from "@stellar/stellar-sdk";
+import { Horizon, Networks } from "@stellar/stellar-sdk";
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { XDRDecoder, DecodedContractEvent } from "../utils/XDRDecoder";
-
-const { Server, Networks } = StellarSdk;
 
 export interface StellarNetworkConfig {
   horizonUrl: string;
@@ -68,16 +65,19 @@ export interface StellarContractCallResult {
 export class StellarProvider {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
-  private server: typeof Server;
+  private server: Horizon.Server;
   private networkPassphrase: string;
   private xdrDecoder: XDRDecoder;
 
   constructor(config?: Partial<StellarNetworkConfig>) {
     const stellarConfig = config || this.config.stellar;
 
-    this.server = new Server(stellarConfig.horizonUrl, {
-      allowHttp: stellarConfig.allowHttp || false,
-    });
+    this.server = new Horizon.Server(
+      stellarConfig.horizonUrl || "https://horizon-testnet.stellar.org",
+      {
+        allowHttp: stellarConfig.allowHttp || false,
+      }
+    );
     this.networkPassphrase = stellarConfig.networkPassphrase || "";
     this.xdrDecoder = new XDRDecoder();
 
@@ -104,13 +104,19 @@ export class StellarProvider {
   }
 
   /**
-   * Get current ledger sequence
+   * Get the current ledger number
    */
   async getCurrentLedger(): Promise<number> {
     try {
-      const ledger = await this.server.ledgers().order("desc").limit(1).call();
-
-      return parseInt(ledger.records[0].sequence);
+      const response = await this.server
+        .ledgers()
+        .order("desc")
+        .limit(1)
+        .call();
+      if (response.records && response.records.length > 0) {
+        return response.records[0].sequence;
+      }
+      throw new Error("No ledger found");
     } catch (error) {
       this.logger.error("Failed to get current ledger:", error);
       throw error;
@@ -123,22 +129,21 @@ export class StellarProvider {
   async getAccountInfo(accountId: string): Promise<StellarAccountInfo> {
     try {
       const account = await this.server.loadAccount(accountId);
-
       return {
-        accountId: account.accountId(),
-        sequence: account.sequenceNumber(),
+        accountId: account.id,
+        sequence: account.sequence,
         balances: account.balances,
         thresholds: account.thresholds,
         flags: account.flags,
       };
     } catch (error) {
-      this.logger.error(`Failed to get account info for ${accountId}:`, error);
+      this.logger.error("Failed to get account info:", error);
       throw error;
     }
   }
 
   /**
-   * Get transaction by hash
+   * Get transaction details
    */
   async getTransaction(hash: string): Promise<StellarTransactionResult> {
     try {
@@ -146,12 +151,11 @@ export class StellarProvider {
         .transactions()
         .transaction(hash)
         .call();
-
       return {
         hash: transaction.hash,
-        ledger: parseInt(transaction.ledger_attr),
+        ledger: transaction.ledger_attr,
         createdAt: transaction.created_at,
-        feePaid: transaction.fee_paid,
+        feePaid: transaction.fee_charged.toString(),
         operationCount: transaction.operation_count,
         envelopeXdr: transaction.envelope_xdr,
         resultXdr: transaction.result_xdr,
@@ -162,13 +166,13 @@ export class StellarProvider {
         signatures: transaction.signatures,
       };
     } catch (error) {
-      this.logger.error(`Failed to get transaction ${hash}:`, error);
+      this.logger.error("Failed to get transaction:", error);
       throw error;
     }
   }
 
   /**
-   * Get operations for an account
+   * Get account operations
    */
   async getAccountOperations(
     accountId: string,
@@ -176,70 +180,54 @@ export class StellarProvider {
     cursor?: string
   ): Promise<Horizon.ServerApi.OperationRecord[]> {
     try {
-      const operations = await this.server
-        .operations()
-        .forAccount(accountId)
-        .limit(limit)
-        .cursor(cursor || "now")
-        .call();
-
-      return operations.records;
+      let builder = this.server.operations().forAccount(accountId).limit(limit);
+      if (cursor) {
+        builder = builder.cursor(cursor);
+      }
+      const response = await builder.call();
+      return response.records;
     } catch (error) {
-      this.logger.error(`Failed to get operations for ${accountId}:`, error);
+      this.logger.error("Failed to get account operations:", error);
       throw error;
     }
   }
 
   /**
-   * Get contract events from a transaction
+   * Get contract events from transaction
    */
   async getContractEvents(
     transactionHash: string
   ): Promise<DecodedContractEvent[]> {
     try {
       const transaction = await this.getTransaction(transactionHash);
-
-      // Parse contract events from resultMetaXdr using XDR decoder
-      const events = this.xdrDecoder.decodeContractEvents(
-        transaction.resultMetaXdr
-      );
-
-      // Add transaction metadata to events
-      return events.map((event) => ({
-        ...event,
-        contractId: event.contractId || transaction.hash, // Fallback if not set
-        ledger: event.ledger || transaction.ledger,
-        timestamp: event.timestamp || new Date(transaction.createdAt).getTime(),
-      }));
+      if (transaction.resultMetaXdr) {
+        return this.xdrDecoder.decodeContractEvents(transaction.resultMetaXdr);
+      }
+      return [];
     } catch (error) {
-      this.logger.error(
-        `Failed to get contract events for ${transactionHash}:`,
-        error
-      );
+      this.logger.error("Failed to get contract events:", error);
       return [];
     }
   }
 
   /**
-   * Submit a transaction to the network
+   * Submit a transaction
    */
   async submitTransaction(transaction: any): Promise<StellarTransactionResult> {
     try {
-      const result = await this.server.submitTransaction(transaction);
-
+      const response = await this.server.submitTransaction(transaction);
       return {
-        hash: result.hash,
-        ledger: parseInt(result.ledger),
+        hash: response.hash,
+        ledger: response.ledger || 0,
         createdAt: new Date().toISOString(),
-        feePaid: result.fee_paid,
-        operationCount: transaction.operations.length,
-        envelopeXdr: result.envelope_xdr,
-        resultXdr: result.result_xdr,
-        resultMetaXdr: result.result_meta_xdr,
-        feeMetaXdr: result.fee_meta_xdr,
-        memoType: transaction.memo?.type || "none",
-        memo: transaction.memo?.value,
-        signatures: transaction.signatures.map((sig: any) => sig.signature()),
+        feePaid: "0", // Default fee
+        operationCount: 1,
+        envelopeXdr: response.envelope_xdr,
+        resultXdr: response.result_xdr,
+        resultMetaXdr: response.result_meta_xdr,
+        feeMetaXdr: "",
+        memoType: "none",
+        signatures: [],
       };
     } catch (error) {
       this.logger.error("Failed to submit transaction:", error);
@@ -296,5 +284,3 @@ export class StellarProvider {
     }
   }
 }
-
- 

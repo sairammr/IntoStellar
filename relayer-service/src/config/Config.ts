@@ -215,8 +215,18 @@ export class Config {
       throw new Error("Invalid Ethereum RPC URL");
     }
 
-    if (!this.config.ethereum.privateKey.startsWith("0x")) {
-      throw new Error("Invalid Ethereum private key format");
+    // Validate Ethereum private key (can be with or without 0x prefix)
+    const privateKey = this.config.ethereum.privateKey;
+    if (!privateKey.startsWith("0x")) {
+      // Add 0x prefix if missing
+      this.config.ethereum.privateKey = "0x" + privateKey;
+    }
+
+    // Check if it's a valid hex string (64 chars + 0x prefix = 66 chars)
+    if (this.config.ethereum.privateKey.length !== 66) {
+      throw new Error(
+        "Invalid Ethereum private key format - should be 64 hex characters"
+      );
     }
 
     // Validate Stellar config
