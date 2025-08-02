@@ -5,7 +5,7 @@ import { connect, disconnect, getPublicKey, kit } from "../lib/stellar-wallets-k
 import * as Client from "../packages/create_escrow/dist";
 import * as xdr from "@stellar/stellar-base";
 import Server from "@stellar/stellar-sdk";
-import FreighterApi, { signAuthEntry, signTransaction } from "@stellar/freighter-api";
+import freighterApi, { signAuthEntry, signTransaction } from "@stellar/freighter-api";
 
 export default function EscrowTestPage() {
   const [result, setResult] = useState<any>(null);
@@ -194,16 +194,12 @@ export default function EscrowTestPage() {
                 // We need to reconstruct the Buffer and convert it to base64
                 let signedAuthEntryBase64: string;
                 
-                if (signedResult?.signedAuthEntry?.type === 'Buffer' && signedResult?.signedAuthEntry?.data) {
-                  // Reconstruct the Buffer from the serialized format
+                
                   const buffer = Buffer.from(signedResult?.signedAuthEntry?.data);
                   signedAuthEntryBase64 = buffer.toString('base64');
                   
                   console.log("Reconstructed buffer:", buffer);
                   console.log("Buffer as base64:", signedAuthEntryBase64);
-                } else {
-                  throw new Error("Unexpected signedAuthEntry format");
-                }
                 
                 return {
                   signedAuthEntry: signedAuthEntryBase64,
@@ -215,38 +211,32 @@ export default function EscrowTestPage() {
               }
             }
               });
-       console.log("Auth entries signed successfully");
-          
-          const result = await response.signAndSend({
+            const signedTx = await response.signAndSend({
 
-            signTransaction: async (tx: string) => {
-              return { signedTxXdr: tx, signerAddress: whoElseNeedsToSign[0] };
-            }
-          });
+              signTransaction: async (tx: string) => {
+                
+                const signedTx = await freighterApi.signTransaction(tx, {
+                  address: walletAddress,
+                  networkPassphrase: 'Test SDF Network ; September 2015'
+                })
+                console.log("Signed Tx:", signedTx);
+                return { 
+                  signedTxXdr: signedTx?.signedTxXdr || "", 
+                  signerAddress: walletAddress // Use the main wallet address
+                };
+              }}
+             
+            )
 
-          console.log("Auth entries signed successfully");
-         
-          console.log("Submitted Transaction:", result);
-          console.log("Auth entries signed successfully");
+
+          console.log("Submitted Transaction:",signedTx );
+
         } catch (signError) {
-          console.error("Error signing auth entries:", signError);
-          throw new Error(`Failed to sign auth entries: ${signError instanceof Error ? signError.message : 'Unknown error'}`);
+          console.error("Error:", signError); 
         }
       } else {
         console.log("No additional signatures needed");
       }
-      
-      
-      // Submit the transaction
-      console.log("Submitting transaction...");
-      try {
-        const result = await response.signAndSend();
-        console.log("Submitted Transaction:", result);
-      } catch (sendError) {
-        console.error("Error submitting transaction:", sendError);
-        throw new Error(`Failed to submit transaction: ${sendError instanceof Error ? sendError.message : 'Unknown error'}`);
-      }
-
 
       
       setResult({
@@ -260,6 +250,7 @@ export default function EscrowTestPage() {
       setLoading(false);
     }
   };
+
 
   const testCreateDstEscrow = async () => {
     if (!isConnected || !walletAddress) {
