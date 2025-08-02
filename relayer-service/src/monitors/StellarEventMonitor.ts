@@ -172,3 +172,265 @@ export class StellarEventMonitor {
     };
   }
 }
+
+  private isEscrowFactoryOperation(
+    operation: Horizon.ServerApi.OperationRecord
+  ): boolean {
+    // Check if it's an invoke contract operation
+    if (operation.type !== "invoke_host_function") {
+      return false;
+    }
+
+    const invokeOp =
+      operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse;
+
+    // Check if the contract being called is our escrow factory
+    // Note: You'll need to adapt this based on how Stellar contract calls are structured
+    return (
+      invokeOp.source_account === this.config.contracts.stellar.escrowFactory ||
+      (invokeOp as any).contract === this.config.contracts.stellar.escrowFactory
+    );
+  }
+
+  /**
+   * Handle a Stellar operation
+   */
+  private async handleOperation(
+    operation: Horizon.ServerApi.OperationRecord
+  ): Promise<void> {
+    try {
+      if (operation.type === "invoke_host_function") {
+        await this.handleContractInvocation(
+          operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+        );
+      }
+    } catch (error) {
+      this.logger.error("Error handling Stellar operation:", error);
+    }
+  }
+
+  /**
+   * Handle contract invocation operations
+   */
+  private async handleContractInvocation(
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): Promise<void> {
+    try {
+      // Get the transaction details to access events
+      const transaction = await this.server
+        .transactions()
+        .transaction(operation.transaction_hash)
+        .call();
+
+      // Parse contract events from the transaction
+      await this.parseContractEvents(transaction, operation);
+    } catch (error) {
+      this.logger.error("Error handling contract invocation:", error);
+    }
+  }
+
+  /**
+   * Parse contract events from a transaction
+   */
+  private async parseContractEvents(
+    transaction: Horizon.ServerApi.TransactionRecord,
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): Promise<void> {
+    try {
+      // Note: This is a simplified implementation
+      // In practice, you'll need to decode the XDR data to extract contract events
+      // Stellar contract events are embedded in the transaction result XDR
+
+      // For now, we'll use a simplified approach where we check the operation function name
+      // and extract parameters to determine if an escrow was created
+
+      const functionName = this.extractFunctionName(operation);
+
+      if (functionName === "create_escrow") {
+        await this.handleEscrowCreatedEvent(transaction, operation);
+      } else if (functionName === "withdraw") {
+        await this.handleWithdrawalEvent(transaction, operation);
+      } else if (functionName === "cancel") {
+        await this.handleCancellationEvent(transaction, operation);
+      }
+    } catch (error) {
+      this.logger.error("Error parsing contract events:", error);
+    }
+  }
+
+  /**
+   * Extract function name from contract invocation
+   */
+  private extractFunctionName(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // This is a placeholder implementation
+    // In practice, you'd decode the XDR to get the actual function name
+
+    // For now, we'll try to infer from operation parameters or metadata
+    // You'll need to implement proper XDR decoding here
+
+    return "unknown";
+  }
+
+  /**
+   * Handle escrow created event
+   */
+  private async handleEscrowCreatedEvent(
+    transaction: Horizon.ServerApi.TransactionRecord,
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): Promise<void> {
+    try {
+      // Extract escrow parameters from the operation
+      // This is a simplified implementation - you'd need to decode XDR properly
+
+      // TODO: Properly decode Stellar event XDR to extract complete timelock information
+      // For now, using placeholder values - this needs proper XDR decoding implementation
+      const escrowEvent: EscrowCreatedEvent = {
+        hashLock: this.extractHashLock(operation),
+        orderHash: "0x" + "0".repeat(64), // TODO: Extract from XDR
+        maker: operation.source_account,
+        taker: this.extractResolver(operation),
+        token: this.extractToken(operation),
+        amount: this.extractAmount(operation),
+        safetyDeposit: this.extractSafetyDeposit(operation),
+        timelocks: {
+          // TODO: Extract actual timelock values from Stellar event XDR
+          finality: 300, // 5 minutes
+          srcWithdrawal: 3600, // 1 hour
+          srcPublicWithdrawal: 7200, // 2 hours
+          srcCancellation: 14400, // 4 hours
+          srcPublicCancellation: 21600, // 6 hours
+          dstWithdrawal: 3600, // 1 hour
+          dstPublicWithdrawal: 7200, // 2 hours
+          dstCancellation: 28800, // 8 hours
+          deployedAt: new Date(transaction.created_at).getTime(),
+        },
+        chain: "stellar",
+        transactionHash: transaction.hash,
+        timestamp: new Date(transaction.created_at).getTime(),
+      };
+
+      this.logger.info("Detected Stellar escrow creation", {
+        hashLock: escrowEvent.hashLock,
+        transactionHash: transaction.hash,
+        ledger: transaction.ledger_attr,
+      });
+
+      // Emit to relayer service
+      this.relayerService.emit("escrowCreated", escrowEvent);
+    } catch (error) {
+      this.logger.error("Error processing escrow created event:", error);
+    }
+  }
+
+  /**
+   * Handle withdrawal event
+   */
+  private async handleWithdrawalEvent(
+    transaction: Horizon.ServerApi.TransactionRecord,
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): Promise<void> {
+    try {
+      const hashLock = this.extractHashLock(operation);
+      const secret = this.extractSecret(operation);
+
+      this.logger.info("Detected Stellar withdrawal", {
+        hashLock,
+        transactionHash: transaction.hash,
+      });
+
+      this.relayerService.emit("withdrawal", {
+        hashLock,
+        chain: "stellar",
+        secret,
+        transactionHash: transaction.hash,
+      });
+    } catch (error) {
+      this.logger.error("Error processing withdrawal event:", error);
+    }
+  }
+
+  /**
+   * Handle cancellation event
+   */
+  private async handleCancellationEvent(
+    transaction: Horizon.ServerApi.TransactionRecord,
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): Promise<void> {
+    try {
+      const hashLock = this.extractHashLock(operation);
+
+      this.logger.info("Detected Stellar cancellation", {
+        hashLock,
+        transactionHash: transaction.hash,
+      });
+
+      this.relayerService.emit("cancellation", {
+        hashLock,
+        chain: "stellar",
+        transactionHash: transaction.hash,
+      });
+    } catch (error) {
+      this.logger.error("Error processing cancellation event:", error);
+    }
+  }
+
+  // Placeholder extraction methods - implement proper XDR decoding
+  private extractHashLock(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "0x" + "0".repeat(64); // Placeholder
+  }
+
+  private extractResolver(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
+  }
+
+  private extractToken(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
+  }
+
+  private extractAmount(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "1000000"; // Placeholder
+  }
+
+  private extractSafetyDeposit(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "100000"; // Placeholder
+  }
+
+  private extractSecret(
+    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  ): string {
+    // Implement proper parameter extraction from XDR
+    return "0x" + "0".repeat(64); // Placeholder
+  }
+
+  /**
+   * Get current status
+   */
+  getStatus(): {
+    running: boolean;
+    lastProcessedLedger: number;
+    horizonUrl: string;
+  } {
+    return {
+      running: this.running,
+      lastProcessedLedger: this.lastProcessedLedger,
+      horizonUrl: this.config.stellar.horizonUrl,
+    };
+  }
+}
