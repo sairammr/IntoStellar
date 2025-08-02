@@ -6,24 +6,11 @@ import { ethers } from "ethers";
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { EscrowCreatedEvent } from "./RelayerService";
-import { TimelockData } from "../types/Events";
 import { StellarProvider } from "./StellarProvider";
 import { StellarWallet } from "./StellarWallet";
 import { StellarContractClient } from "./StellarContractClient";
 
-export interface CrossChainSwapRequest {
-  hashLock: string;
-  orderHash: string;
-  maker: string;
-  taker: string;
-  token: string;
-  amount: string;
-  safetyDeposit: string;
-  timelocks: TimelockData;
-  sourceChain: "ethereum" | "stellar";
-}
-
-export interface StellarEscrowCreationParams {
+export interface CrossChainSwapParams {
   orderHash: string;
   hashLock: string;
   maker: string;
@@ -40,26 +27,6 @@ export interface StellarEscrowCreationParams {
     dstWithdrawalDelay: number;
     dstPublicWithdrawalDelay: number;
     dstCancellationDelay: number;
-  };
-}
-
-export interface EthereumEscrowCreationParams {
-  orderHash: string;
-  hashLock: string;
-  maker: string;
-  taker: string;
-  token: string;
-  amount: string;
-  safetyDeposit: string;
-  timelocks: {
-    finality: number;
-    srcWithdrawal: number;
-    srcPublicWithdrawal: number;
-    srcCancellation: number;
-    srcPublicCancellation: number;
-    dstWithdrawal: number;
-    dstPublicWithdrawal: number;
-    dstCancellation: number;
   };
 }
 
@@ -177,7 +144,7 @@ export class CrossChainOrchestrator {
       });
 
       // Convert Ethereum parameters to Stellar format
-      const stellarParams: StellarEscrowCreationParams = {
+      const stellarParams: CrossChainSwapParams = {
         orderHash: ethereumEvent.orderHash,
         hashLock: ethereumEvent.hashLock,
         maker: ethereumEvent.maker,
@@ -224,7 +191,7 @@ export class CrossChainOrchestrator {
       });
 
       // Convert Stellar parameters to Ethereum format
-      const ethereumParams: EthereumEscrowCreationParams = {
+      const ethereumParams: CrossChainSwapParams = {
         orderHash: stellarEvent.orderHash,
         hashLock: stellarEvent.hashLock,
         maker: stellarEvent.maker,
@@ -233,14 +200,15 @@ export class CrossChainOrchestrator {
         amount: stellarEvent.amount,
         safetyDeposit: stellarEvent.safetyDeposit,
         timelocks: {
-          finality: stellarEvent.timelocks.finality,
-          srcWithdrawal: stellarEvent.timelocks.srcWithdrawal,
-          srcPublicWithdrawal: stellarEvent.timelocks.srcPublicWithdrawal,
-          srcCancellation: stellarEvent.timelocks.srcCancellation,
-          srcPublicCancellation: stellarEvent.timelocks.srcPublicCancellation,
-          dstWithdrawal: stellarEvent.timelocks.dstWithdrawal,
-          dstPublicWithdrawal: stellarEvent.timelocks.dstPublicWithdrawal,
-          dstCancellation: stellarEvent.timelocks.dstCancellation,
+          finalityDelay: stellarEvent.timelocks.finality,
+          srcWithdrawalDelay: stellarEvent.timelocks.srcWithdrawal,
+          srcPublicWithdrawalDelay: stellarEvent.timelocks.srcPublicWithdrawal,
+          srcCancellationDelay: stellarEvent.timelocks.srcCancellation,
+          srcPublicCancellationDelay:
+            stellarEvent.timelocks.srcPublicCancellation,
+          dstWithdrawalDelay: stellarEvent.timelocks.dstWithdrawal,
+          dstPublicWithdrawalDelay: stellarEvent.timelocks.dstPublicWithdrawal,
+          dstCancellationDelay: stellarEvent.timelocks.dstCancellation,
         },
       };
 
@@ -253,14 +221,14 @@ export class CrossChainOrchestrator {
         ethereumParams.token,
         ethereumParams.amount,
         ethereumParams.safetyDeposit,
-        ethereumParams.timelocks.finality,
-        ethereumParams.timelocks.srcWithdrawal,
-        ethereumParams.timelocks.srcPublicWithdrawal,
-        ethereumParams.timelocks.srcCancellation,
-        ethereumParams.timelocks.srcPublicCancellation,
-        ethereumParams.timelocks.dstWithdrawal,
-        ethereumParams.timelocks.dstPublicWithdrawal,
-        ethereumParams.timelocks.dstCancellation,
+        ethereumParams.timelocks.finalityDelay,
+        ethereumParams.timelocks.srcWithdrawalDelay,
+        ethereumParams.timelocks.srcPublicWithdrawalDelay,
+        ethereumParams.timelocks.srcCancellationDelay,
+        ethereumParams.timelocks.srcPublicCancellationDelay,
+        ethereumParams.timelocks.dstWithdrawalDelay,
+        ethereumParams.timelocks.dstPublicWithdrawalDelay,
+        ethereumParams.timelocks.dstCancellationDelay,
         {
           gasLimit: 500000, // Adjust as needed
         }
@@ -556,22 +524,21 @@ export class CrossChainOrchestrator {
   /**
    * Get orchestrator status
    */
-  getStatus(): {
+  async getStatus(): Promise<{
     ethereumConnected: boolean;
     ethereumAddress: string;
     ethereumFactoryAddress: string;
     stellarConnected: boolean;
     stellarAddress: string;
     stellarFactoryAddress: string;
-  } {
+  }> {
     return {
       ethereumConnected: !!this.ethereumProvider,
       ethereumAddress: this.ethereumWallet?.address || "",
       ethereumFactoryAddress: this.config.contracts.ethereum.escrowFactory,
-      stellarConnected: this.stellarProvider?.isConnected() || false,
+      stellarConnected: (await this.stellarProvider?.isConnected()) || false,
       stellarAddress: this.stellarWallet?.getAccountId() || "",
-      stellarFactoryAddress:
-        this.stellarContractClient?.getEscrowFactoryId() || "",
+      stellarFactoryAddress: this.config.contracts.stellar.escrowFactory,
     };
   }
 }

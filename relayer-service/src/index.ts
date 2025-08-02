@@ -37,7 +37,7 @@ class FusionPlusRelayer {
 
     // Initialize event monitors
     this.ethereumMonitor = new EthereumEventMonitor(this.relayerService);
-    this.stellarMonitor = new StellarEventMonitor(this.relayerService);
+    this.stellarMonitor = new StellarEventMonitor();
 
     // Initialize API server
     this.relayerAPI = new RelayerAPI(this.relayerService);

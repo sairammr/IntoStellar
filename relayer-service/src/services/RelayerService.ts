@@ -460,11 +460,6 @@ export class RelayerService extends EventEmitter {
     completedSwaps: number;
     cancelledSwaps: number;
     totalSwaps: number;
-    orchestratorStatus: {
-      ethereumConnected: boolean;
-      ethereumAddress: string;
-      ethereumFactoryAddress: string;
-    };
   } {
     const swaps = Array.from(this.activeSwaps.values());
     return {
@@ -472,7 +467,33 @@ export class RelayerService extends EventEmitter {
       completedSwaps: swaps.filter((s) => s.completed).length,
       cancelledSwaps: swaps.filter((s) => s.cancelled).length,
       totalSwaps: swaps.length,
-      orchestratorStatus: this.crossChainOrchestrator.getStatus(),
+    };
+  }
+
+  async getStatus(): Promise<{
+    activeSwaps: number;
+    completedSwaps: number;
+    cancelledSwaps: number;
+    totalSwaps: number;
+    orchestratorStatus: {
+      ethereumConnected: boolean;
+      ethereumAddress: string;
+      ethereumFactoryAddress: string;
+    };
+  }> {
+    const orchestratorStatus = await this.crossChainOrchestrator.getStatus();
+    const stats = this.getStatistics();
+
+    return {
+      activeSwaps: stats.activeSwaps,
+      completedSwaps: stats.completedSwaps,
+      cancelledSwaps: stats.cancelledSwaps,
+      totalSwaps: stats.totalSwaps,
+      orchestratorStatus: {
+        ethereumConnected: orchestratorStatus.ethereumConnected,
+        ethereumAddress: orchestratorStatus.ethereumAddress,
+        ethereumFactoryAddress: orchestratorStatus.ethereumFactoryAddress,
+      },
     };
   }
 }

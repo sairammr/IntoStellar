@@ -7,7 +7,7 @@ import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { StellarProvider, StellarAccountInfo } from "./StellarProvider";
 
-const { Keypair, Transaction, Networks, Asset, Operation, Memo } = StellarSdk;
+const { Keypair, Transaction, Networks, Operation, Memo } = StellarSdk;
 
 export interface StellarWalletConfig {
   privateKey: string;
@@ -36,7 +36,7 @@ export interface StellarContractCallOptions {
 export class StellarWallet {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
-  private keypair: StellarSdk.Keypair;
+  private keypair: any;
   private accountId: string;
   private networkPassphrase: string;
   private provider: StellarProvider;
@@ -49,8 +49,8 @@ export class StellarWallet {
     const walletConfig = config || this.config.stellar;
 
     this.keypair = Keypair.fromSecret(walletConfig.privateKey);
-    this.accountId = walletConfig.accountId;
-    this.networkPassphrase = walletConfig.networkPassphrase;
+    this.accountId = walletConfig.accountId || "";
+    this.networkPassphrase = walletConfig.networkPassphrase || "";
     this.provider = provider;
 
     this.logger.info("StellarWallet initialized", {
@@ -157,9 +157,9 @@ export class StellarWallet {
    * Create and sign a transaction
    */
   async createTransaction(
-    operations: StellarSdk.Operation[],
+    operations: any[],
     options: StellarTransactionOptions = {}
-  ): Promise<StellarSdk.Transaction> {
+  ): Promise<any> {
     try {
       const sequence = await this.getSequenceNumber();
 
@@ -187,9 +187,7 @@ export class StellarWallet {
   /**
    * Submit a transaction to the network
    */
-  async submitTransaction(
-    transaction: StellarSdk.Transaction
-  ): Promise<string> {
+  async submitTransaction(transaction: any): Promise<string> {
     try {
       const result = await this.provider.submitTransaction(transaction);
 
@@ -209,7 +207,7 @@ export class StellarWallet {
    * Create and submit a transaction in one step
    */
   async createAndSubmitTransaction(
-    operations: StellarSdk.Operation[],
+    operations: any[],
     options: StellarTransactionOptions = {}
   ): Promise<string> {
     const transaction = await this.createTransaction(operations, options);
@@ -281,7 +279,7 @@ export class StellarWallet {
           {
             contractId,
             functionName: options.functionName,
-            error: error.message,
+            error: error instanceof Error ? error.message : "Unknown error",
           }
         );
 
@@ -326,6 +324,8 @@ export class StellarWallet {
         hashLock: params.hashLock,
       });
 
+      // Call the factory's post_interaction function
+      // This will trigger escrow creation through the LOP integration
       const args = [
         params.orderHash,
         params.hashLock,
@@ -347,7 +347,7 @@ export class StellarWallet {
       const transactionHash = await this.callContractWithRetry(
         factoryContractId,
         {
-          functionName: "create_src_escrow",
+          functionName: "post_interaction", // ✅ Matches our Factory contract
           args,
           fee: "200000", // Higher fee for escrow creation
           memo: `Create escrow: ${params.hashLock}`,
@@ -399,6 +399,8 @@ export class StellarWallet {
         hashLock: params.hashLock,
       });
 
+      // For destination escrow, we need to call the factory's post_interaction
+      // with different parameters indicating it's a destination escrow
       const args = [
         params.orderHash,
         params.hashLock,
@@ -417,12 +419,16 @@ export class StellarWallet {
         params.timelocks.dstCancellationDelay,
       ];
 
-      const transactionHash = await this.callContract(factoryContractId, {
-        functionName: "create_dst_escrow",
-        args,
-        fee: "200000", // Higher fee for escrow creation
-        memo: `Create escrow: ${params.hashLock}`,
-      });
+      const transactionHash = await this.callContractWithRetry(
+        factoryContractId,
+        {
+          functionName: "post_interaction", // ✅ Matches our Factory contract
+          args,
+          fee: "200000",
+          memo: `Create dst escrow: ${params.hashLock}`,
+        },
+        3
+      );
 
       this.logger.info("Destination escrow created on Stellar", {
         orderHash: params.orderHash,
@@ -447,17 +453,21 @@ export class StellarWallet {
     try {
       this.logger.info("Withdrawing from Stellar escrow", {
         escrowContractId,
-        secret: secret.substring(0, 10) + "...", // Log partial secret for security
+        secret: secret.substring(0, 10) + "...",
       });
 
-      const transactionHash = await this.callContract(escrowContractId, {
-        functionName: "withdraw",
-        args: [secret],
-        fee: "150000",
-        memo: "Withdraw from escrow",
-      });
+      const transactionHash = await this.callContractWithRetry(
+        escrowContractId,
+        {
+          functionName: "withdraw", // ✅ Matches our FusionPlusEscrow contract
+          args: [secret],
+          fee: "150000",
+          memo: `Withdraw: ${secret.substring(0, 10)}...`,
+        },
+        3
+      );
 
-      this.logger.info("Withdrawal submitted", {
+      this.logger.info("Withdrawal from Stellar escrow successful", {
         escrowContractId,
         transactionHash,
       });
@@ -478,14 +488,18 @@ export class StellarWallet {
         escrowContractId,
       });
 
-      const transactionHash = await this.callContract(escrowContractId, {
-        functionName: "cancel",
-        args: [],
-        fee: "100000",
-        memo: "Cancel escrow",
-      });
+      const transactionHash = await this.callContractWithRetry(
+        escrowContractId,
+        {
+          functionName: "cancel", // ✅ Matches our FusionPlusEscrow contract
+          args: [],
+          fee: "100000",
+          memo: "Cancel escrow",
+        },
+        3
+      );
 
-      this.logger.info("Cancellation submitted", {
+      this.logger.info("Stellar escrow cancellation successful", {
         escrowContractId,
         transactionHash,
       });

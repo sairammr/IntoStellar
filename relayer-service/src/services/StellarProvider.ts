@@ -6,12 +6,7 @@ import { Horizon } from "@stellar/stellar-sdk";
 import StellarSdk from "@stellar/stellar-sdk";
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
-import {
-  XDRDecoder,
-  DecodedContractEvent,
-  DecodedFunctionCall,
-  DecodedTransactionResult,
-} from "../utils/XDRDecoder";
+import { XDRDecoder, DecodedContractEvent } from "../utils/XDRDecoder";
 
 const { Server, Networks } = StellarSdk;
 
@@ -285,49 +280,19 @@ export class StellarProvider {
   }
 
   /**
-   * Parse contract events from XDR
-   */
-  private parseContractEventsFromXDR(resultMetaXdr: string): any[] {
-    try {
-      // This is a placeholder implementation
-      // In practice, you'd need to properly decode the XDR to extract contract events
-      // Stellar contract events are embedded in the transaction result metadata
-
-      // For now, return empty array - implement proper XDR decoding
-      this.logger.debug(
-        "Parsing contract events from XDR (placeholder implementation)"
-      );
-
-      return [];
-    } catch (error) {
-      this.logger.error("Failed to parse contract events from XDR:", error);
-      return [];
-    }
-  }
-
-  /**
-   * Get server instance for direct access
-   */
-  getServer(): typeof Server {
-    return this.server;
-  }
-
-  /**
-   * Get network passphrase
-   */
-  getNetworkPassphrase(): string {
-    return this.networkPassphrase;
-  }
-
-  /**
-   * Check if provider is connected
+   * Check if connected to Stellar network
    */
   async isConnected(): Promise<boolean> {
     try {
-      await this.getCurrentLedger();
-      return true;
-    } catch (error) {
-      return false;
+      await this.server.loadAccount(
+        "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF"
+      );
+      return false; // If we get here, we're connected but the account doesn't exist
+    } catch (error: any) {
+      if (error.response?.status === 404) {
+        return true; // 404 means we're connected but account doesn't exist
+      }
+      return false; // Other errors mean we're not connected
     }
   }
 }
