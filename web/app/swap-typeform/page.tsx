@@ -1,13 +1,15 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import InterstellarButton from '../components/InterstellarButton';
 
 interface SwapForm {
+  ethAddress: string;
+  walletAddress: string; // Stellar address
   direction: string;
   fromAsset: string;
   fromAmount: string;
-  walletAddress: string;
 }
 
 interface ConversionRate {
@@ -26,11 +28,17 @@ interface Question {
   id: string;
   title: string;
   subtitle: string;
-  type: 'direction' | 'asset' | 'amount' | 'slippage' | 'wallet' | 'confirm';
+  type: 'connect' | 'direction' | 'asset' | 'amount' | 'slippage' | 'wallet' | 'confirm';
   options?: string[];
 }
 
 const questions: Question[] = [
+  {
+    id: 'connect',
+    title: 'Connect your wallets',
+    subtitle: 'Link your Ethereum (Metamask) and Stellar (Freighter) wallets to continue',
+    type: 'connect'
+  },
   {
     id: 'direction',
     title: 'Which direction do you want to swap?',
@@ -40,14 +48,14 @@ const questions: Question[] = [
   },
   {
     id: 'fromAsset',
-    title: 'What are you swapping FROM?',
+    title: 'Select the asset you are swapping',
     subtitle: 'Select the asset you want to convert (only ETH available)',
     type: 'asset',
     options: ['USDC', 'USDT', 'BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'LINK']
   },
   {
     id: 'fromAmount',
-    title: 'How much ETH do you want to swap?',
+    title: 'How much do you want to swap?',
     subtitle: 'Enter the amount of ETH you want to convert to XLM',
     type: 'amount'
   },
@@ -68,10 +76,11 @@ const questions: Question[] = [
 export default function SwapTypeformPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [swapForm, setSwapForm] = useState<SwapForm>({
+    ethAddress: '',
+    walletAddress: '',
     direction: '',
     fromAsset: '',
-    fromAmount: '',
-    walletAddress: ''
+    fromAmount: ''
   });
   const [conversionRate, setConversionRate] = useState<ConversionRate>({
     fromAmount: '',
@@ -82,7 +91,8 @@ export default function SwapTypeformPage() {
     error: null
   });
   const [isLoading, setIsLoading] = useState(false);
-  const [swapStatus, setSwapStatus] = useState<string>('');
+  
+
   const [isLoaded, setIsLoaded] = useState(false);
   const videoRef = useRef<HTMLVideoElement>(null);
 
@@ -109,6 +119,9 @@ export default function SwapTypeformPage() {
         let hasAnswer = false;
         
         switch (currentQuestion.type) {
+          case 'connect':
+            hasAnswer = !!swapForm.ethAddress && !!swapForm.walletAddress;
+            break;
           case 'direction':
             hasAnswer = !!swapForm.direction;
             break;
@@ -174,6 +187,8 @@ export default function SwapTypeformPage() {
     const currentQuestion = questions[currentStep];
     
     switch (currentQuestion.type) {
+      case 'connect':
+        return !!swapForm.ethAddress && !!swapForm.walletAddress;
       case 'asset':
         return !!swapForm[currentQuestion.id as keyof SwapForm];
       case 'amount':
@@ -233,26 +248,63 @@ export default function SwapTypeformPage() {
     }
   };
 
-  const handleSwap = async () => {
-    setIsLoading(true);
-    setSwapStatus('Initiating interstellar transfer...');
-    
-    try {
-      // Simulate swap process
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      setSwapStatus('Transfer completed successfully! Your assets have transcended dimensions.');
-    } catch (error) {
-      setSwapStatus('Transfer failed. Please try again.');
-    } finally {
-      setIsLoading(false);
-    }
+  const router = useRouter();
+
+  const handleSwap = () => {
+    router.push(`/swap-typeform/progress?direction=${encodeURIComponent(swapForm.direction)}`);
   };
+
 
   const currentQuestion = questions[currentStep];
   const progress = ((currentStep + 1) / questions.length) * 100;
 
+  const isEthToXlm = swapForm.direction === 'ETH → XLM';
+
   const renderQuestion = () => {
     switch (currentQuestion.type) {
+      case 'connect':
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {/* Ethereum Wallet */}
+            <div className="p-6 rounded-lg border-2 border-white/20 bg-white/5 text-center text-white/80 space-y-4">
+              <h3 className="text-xl font-bold">Ethereum Wallet</h3>
+              {swapForm.ethAddress ? (
+                <p className="font-mono break-all text-sm">{swapForm.ethAddress}</p>
+              ) : (
+                <InterstellarButton onClick={async () => {
+                  if ((window as any).ethereum) {
+                    try {
+                      const accounts = await (window as any).ethereum.request({ method: 'eth_requestAccounts' });
+                      setSwapForm(prev => ({ ...prev, ethAddress: accounts[0] }));
+                    } catch (err) {
+                      console.error(err);
+                    }
+                  } else {
+                    alert('MetaMask not detected');
+                  }
+                }}>Connect Metamask</InterstellarButton>
+              )}
+            </div>
+            {/* Stellar Wallet */}
+            <div className="p-6 rounded-lg border-2 border-white/20 bg-white/5 text-center text-white/80 space-y-4">
+              <h3 className="text-xl font-bold">Stellar Wallet</h3>
+              {swapForm.walletAddress ? (
+                <p className="font-mono break-all text-sm">{swapForm.walletAddress}</p>
+              ) : (
+                <InterstellarButton onClick={async () => {
+                  try {
+                    const { connect: connectStellar, getPublicKey } = await import('../lib/stellar-wallets-kit');
+                    await connectStellar();
+                    const pk = await getPublicKey();
+                    if (pk) setSwapForm(prev => ({ ...prev, walletAddress: pk }));
+                  } catch (err) {
+                    console.error(err);
+                  }
+                }}>Connect Freighter</InterstellarButton>
+              )}
+            </div>
+          </div>
+        );
       case 'direction':
         return (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -282,11 +334,11 @@ export default function SwapTypeformPage() {
             {currentQuestion.options?.map((option) => (
               <button
                 key={option}
-                onClick={() => option === 'ETH' ? handleInputChange(option) : null}
-                disabled={option !== 'ETH'}
+                onClick={() => (isEthToXlm ? option === 'ETH' : option === 'XLM') ? handleInputChange(option) : null}
+                disabled={isEthToXlm ? option !== 'ETH' : option !== 'XLM'}
                 className={`
                   p-4 rounded-lg border-2 transition-all duration-300
-                  ${option === 'ETH' 
+                  ${(isEthToXlm ? option === 'ETH' : option === 'XLM')
                     ? swapForm.fromAsset === option
                       ? 'border-white/50 bg-white/10 text-white'
                       : 'border-white/20 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10'
@@ -308,7 +360,7 @@ export default function SwapTypeformPage() {
           <div className="max-w-md mx-auto">
             <input
               type="number"
-              placeholder="0.00"
+              placeholder={isEthToXlm ? 'ETH amount' : 'XLM amount'}
               value={swapForm.fromAmount}
               onChange={(e) => handleInputChange(e.target.value)}
               className="w-full px-6 py-3 text-xl text-center bg-white/10 border border-white/30 rounded-lg text-white placeholder-white/50 font-mono focus:outline-none focus:border-white/50 transition-colors"
@@ -353,13 +405,15 @@ export default function SwapTypeformPage() {
               <div className="flex justify-between items-center mb-3">
                 <span className="text-white/70 text-sm">To:</span>
                 <span className="text-white font-mono text-sm">
-                  {conversionRate.loading ? 'Loading...' : conversionRate.toAmount ? `${conversionRate.toAmount} XLM` : '~0 XLM'}
+                  {conversionRate.loading ? 'Loading...' : conversionRate.toAmount ? `${conversionRate.toAmount} ${isEthToXlm ? 'XLM' : 'ETH'}` : '~0'}
                 </span>
               </div>
               {conversionRate.rate && (
                 <div className="flex justify-between items-center mb-3">
                   <span className="text-white/70 text-sm">Rate:</span>
-                  <span className="text-white font-mono text-sm">1 ETH = {conversionRate.rate} XLM</span>
+                  <span className="text-white font-mono text-sm">
+                    {isEthToXlm ? `1 ETH = ${conversionRate.rate} XLM` : `1 XLM = ${conversionRate.rate} ETH`}
+                  </span>
                 </div>
               )}
               {conversionRate.ethPriceUSD && (
@@ -388,7 +442,7 @@ export default function SwapTypeformPage() {
               )}
               <div className="flex justify-between items-center mb-3">
                 <span className="text-white/70 text-sm">Network:</span>
-                <span className="text-white font-mono text-sm">Ethereum → Stellar</span>
+                <span className="text-white font-mono text-sm">{isEthToXlm ? 'Ethereum → Stellar' : 'Stellar → Ethereum'}</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-white/70 text-sm">Wallet:</span>
@@ -499,11 +553,7 @@ export default function SwapTypeformPage() {
             </div>
 
             {/* Status */}
-            {swapStatus && (
-              <div className="mt-4 p-3 rounded-lg bg-white/10 border border-white/20">
-                <p className="text-white/80 font-mono text-center text-sm">{swapStatus}</p>
-              </div>
-            )}
+            
           </div>
         </div>
       </div>
