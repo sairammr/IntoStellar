@@ -4,6 +4,7 @@ import { useState, useRef, useEffect } from 'react';
 import InterstellarButton from '../components/InterstellarButton';
 
 interface SwapForm {
+  direction: string;
   fromAsset: string;
   fromAmount: string;
   walletAddress: string;
@@ -25,15 +26,22 @@ interface Question {
   id: string;
   title: string;
   subtitle: string;
-  type: 'asset' | 'amount' | 'slippage' | 'wallet' | 'confirm';
+  type: 'direction' | 'asset' | 'amount' | 'slippage' | 'wallet' | 'confirm';
   options?: string[];
 }
 
 const questions: Question[] = [
   {
+    id: 'direction',
+    title: 'Which direction do you want to swap?',
+    subtitle: 'Choose your swap direction',
+    type: 'direction',
+    options: ['ETH → XLM', 'XLM → ETH']
+  },
+  {
     id: 'fromAsset',
     title: 'What are you swapping FROM?',
-    subtitle: 'Select the asset you want to convert',
+    subtitle: 'Select the asset you want to convert (only ETH available)',
     type: 'asset',
     options: ['USDC', 'USDT', 'BTC', 'ETH', 'SOL', 'ADA', 'DOT', 'LINK']
   },
@@ -60,6 +68,7 @@ const questions: Question[] = [
 export default function SwapTypeformPage() {
   const [currentStep, setCurrentStep] = useState(0);
   const [swapForm, setSwapForm] = useState<SwapForm>({
+    direction: '',
     fromAsset: '',
     fromAmount: '',
     walletAddress: ''
@@ -100,6 +109,9 @@ export default function SwapTypeformPage() {
         let hasAnswer = false;
         
         switch (currentQuestion.type) {
+          case 'direction':
+            hasAnswer = !!swapForm.direction;
+            break;
           case 'asset':
             hasAnswer = !!swapForm.fromAsset;
             break;
@@ -241,6 +253,29 @@ export default function SwapTypeformPage() {
 
   const renderQuestion = () => {
     switch (currentQuestion.type) {
+      case 'direction':
+        return (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {currentQuestion.options?.map((option) => (
+              <button
+                key={option}
+                onClick={() => handleInputChange(option)}
+                className={`
+                  p-6 rounded-lg border-2 transition-all duration-300
+                  ${swapForm.direction === option
+                    ? 'border-white/50 bg-white/10 text-white'
+                    : 'border-white/20 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10'
+                  }
+                `}
+              >
+                <div className="text-xl font-bold mb-2">{option}</div>
+                <div className="text-sm opacity-70">
+                  {option === 'ETH → XLM' ? 'Ethereum to Stellar' : 'Stellar to Ethereum'}
+                </div>
+              </button>
+            ))}
+          </div>
+        );
       case 'asset':
         return (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
@@ -307,6 +342,10 @@ export default function SwapTypeformPage() {
         return (
           <div className="max-w-md mx-auto space-y-4">
             <div className="bg-white/10 border border-white/20 rounded-lg p-4">
+              <div className="flex justify-between items-center mb-3">
+                <span className="text-white/70 text-sm">Direction:</span>
+                <span className="text-white font-mono text-sm">{swapForm.direction}</span>
+              </div>
               <div className="flex justify-between items-center mb-3">
                 <span className="text-white/70 text-sm">From:</span>
                 <span className="text-white font-mono text-sm">{swapForm.fromAmount} {swapForm.fromAsset}</span>

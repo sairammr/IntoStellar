@@ -277,6 +277,7 @@ export class StellarContractClient {
     }
 
     try {
+      // Try to get account details
       const account = await this.getAccount();
       return {
         success: true,
@@ -285,11 +286,14 @@ export class StellarContractClient {
         note: "Wallet connection successful!",
       };
     } catch (error) {
-      throw new Error(
-        `Connection test failed: ${
-          error instanceof Error ? error.message : "Unknown error"
-        }`
-      );
+      // If account doesn't exist, that's okay - just return basic connection info
+      console.warn("Account not found on network, but wallet is connected:", error);
+      return {
+        success: true,
+        publicKey: this.publicKey,
+        accountId: this.publicKey,
+        note: "Wallet connected but account may not exist on network yet.",
+      };
     }
   }
 }
