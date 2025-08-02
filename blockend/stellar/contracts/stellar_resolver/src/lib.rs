@@ -3,8 +3,19 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, String, xdr::{ScErrorCode, ScErrorType, ToXdr}, token::TokenClient, I256,
 };
 
-// Import LOP types for compatibility
-use stellar_limit_order_protocol;
+// Define ResolverOrder locally to avoid import issues
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolverOrder {
+    pub salt: u64,
+    pub maker: Address,           // Stellar account
+    pub receiver: Address,        // Stellar account
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
+    pub making_amount: u128,
+    pub taking_amount: u128,
+    pub maker_traits: u128,       // MakerTraits as uint256
+}
 
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -294,7 +305,7 @@ impl StellarResolver {
         args: &Bytes,
     ) -> Result<(), Error> {
         // Convert Resolver Order to LOP ResolverOrder
-        let lop_order = stellar_limit_order_protocol::ResolverOrder {
+        let lop_order = ResolverOrder {
             salt: order.salt,
             maker: order.maker.clone(),
             receiver: order.receiver.clone(),
