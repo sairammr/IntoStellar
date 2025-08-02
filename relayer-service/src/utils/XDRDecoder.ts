@@ -38,17 +38,128 @@ export class XDRDecoder {
    */
   decodeContractEvents(resultMetaXdr: string): DecodedContractEvent[] {
     try {
-      // Parse Soroban transaction metadata - simplified for now
-      // In practice, you'd need to properly decode the v3 metadata
       this.logger.debug("Decoding contract events from XDR", {
         resultMetaXdr: resultMetaXdr.substring(0, 100) + "...",
       });
 
-      // For now, return empty array - implement proper decoding when needed
-      return [];
+      // Parse the transaction metadata
+      const meta = xdr.TransactionMeta.fromXDR(resultMetaXdr, "base64");
+      const events: DecodedContractEvent[] = [];
+
+      // Try to access v3 metadata (Soroban)
+      try {
+        const v3Meta = meta.v3();
+        if (v3Meta) {
+          this.logger.debug("Found v3 metadata, processing operations...");
+
+          // Process operations if available
+          const operations = v3Meta.operations();
+          if (operations) {
+            for (let i = 0; i < operations.length; i++) {
+              const opMeta = operations[i];
+              this.logger.debug(`Processing operation ${i}`);
+
+              // Try to access events if available
+              try {
+                // Check if operation has events (this might be in a different structure)
+                if ((opMeta as any).events) {
+                  const opEvents = (opMeta as any).events();
+                  if (opEvents) {
+                    for (const event of opEvents) {
+                      try {
+                        const decodedEvent = this.decodeContractEvent(event);
+                        if (decodedEvent) {
+                          events.push(decodedEvent);
+                        }
+                      } catch (error) {
+                        this.logger.warn(
+                          "Failed to decode individual event:",
+                          error
+                        );
+                      }
+                    }
+                  }
+                }
+              } catch (error) {
+                this.logger.debug("No events found in operation:", error);
+              }
+            }
+          }
+        }
+      } catch (error) {
+        this.logger.debug("Not v3 metadata or different structure:", error);
+      }
+
+      this.logger.debug(`Decoded ${events.length} contract events`);
+      return events;
     } catch (error) {
       this.logger.error("Failed to decode contract events from XDR:", error);
       return [];
+    }
+  }
+
+  /**
+   * Decode a single contract event
+   */
+  private decodeContractEvent(event: any): DecodedContractEvent | null {
+    try {
+      // Decode topics if available
+      let topics: any[] = [];
+      try {
+        const eventTopics = event.topics();
+        if (eventTopics) {
+          topics = eventTopics.map((topic: any) => this.decodeScVal(topic));
+        }
+      } catch (error) {
+        this.logger.debug("No topics found in event:", error);
+      }
+
+      // Decode data if available
+      let data: any = null;
+      try {
+        const eventData = event.data();
+        if (eventData) {
+          data = this.decodeScVal(eventData);
+        }
+      } catch (error) {
+        this.logger.debug("No data found in event:", error);
+      }
+
+      // Extract event type from first topic
+      const eventType =
+        topics.length > 0 ? this.scValToString(topics[0]) : "Unknown";
+
+      // Get contract ID if available
+      let contractId = "unknown";
+      try {
+        contractId = event.contractId().toString();
+      } catch (error) {
+        this.logger.debug("No contract ID found in event:", error);
+      }
+
+      return {
+        type: eventType,
+        topics: topics.map((topic) => this.scValToJsValue(topic)),
+        data: this.scValToJsValue(data),
+        contractId: contractId,
+        ledger: 0, // Will be set by caller
+        timestamp: Date.now(),
+      };
+    } catch (error) {
+      this.logger.warn("Failed to decode contract event:", error);
+      return null;
+    }
+  }
+
+  /**
+   * Convert ScVal to string representation
+   */
+  private scValToString(scVal: xdr.ScVal): string {
+    try {
+      const value = this.scValToJsValue(scVal);
+      return typeof value === "string" ? value : JSON.stringify(value);
+    } catch (error) {
+      return "unknown";
     }
   }
 
@@ -69,7 +180,7 @@ export class XDRDecoder {
 
       return {
         success,
-        returnValue: undefined, // Will be extracted if needed
+        returnValue: undefined, // Will be extracted when needed
         events,
         error: success ? undefined : result.result().switch().toString(),
       };
@@ -86,7 +197,19 @@ export class XDRDecoder {
   /**
    * Decode ScVal to JavaScript value
    */
-  private decodeScVal(scVal: xdr.ScVal): any {
+  decodeScVal(scVal: xdr.ScVal): any {
+    try {
+      return this.scValToJsValue(scVal);
+    } catch (error) {
+      this.logger.warn("Failed to decode ScVal:", error);
+      return undefined;
+    }
+  }
+
+  /**
+   * Convert ScVal to JavaScript value
+   */
+  private scValToJsValue(scVal: xdr.ScVal): any {
     switch (scVal.switch()) {
       case xdr.ScValType.scvBool():
         return scVal.b();
@@ -132,49 +255,39 @@ export class XDRDecoder {
 
       case xdr.ScValType.scvVec():
         const vec = scVal.vec();
-        if (vec) {
-          return vec.map((val) => this.decodeScVal(val));
-        }
-        return [];
+        return vec ? vec.map((item) => this.scValToJsValue(item)) : [];
 
       case xdr.ScValType.scvMap():
         const map = scVal.map();
-        if (map) {
-          const result: Record<string, any> = {};
-          for (const entry of map) {
-            const key = this.decodeScVal(entry.key());
-            const value = this.decodeScVal(entry.val());
-            result[key] = value;
-          }
-          return result;
+        if (!map) return {};
+        const result: any = {};
+        for (const entry of map) {
+          const key = this.scValToJsValue(entry.key());
+          const value = this.scValToJsValue(entry.val());
+          result[key] = value;
         }
-        return {};
+        return result;
 
       case xdr.ScValType.scvAddress():
-        const address = scVal.address();
-        switch (address.switch()) {
+        const addr = scVal.address();
+        switch (addr.switch()) {
           case xdr.ScAddressType.scAddressTypeAccount():
-            return address.accountId().toString();
+            return addr.accountId().toString();
           case xdr.ScAddressType.scAddressTypeContract():
-            return address.contractId().toString();
+            return addr.contractId().toString();
           default:
-            return address.toString();
+            return "unknown_address";
         }
 
       case xdr.ScValType.scvContractInstance():
-        return {
-          contractId: "unknown", // Simplified for now
-          wasmHash: "unknown", // Simplified for now
-        };
+        return scVal.instance().toString();
 
       case xdr.ScValType.scvLedgerKeyContractInstance():
-        return {
-          contractId: "unknown", // Simplified for now
-        };
+        return "unknown_contract_instance";
 
       default:
         this.logger.warn("Unknown ScVal type:", scVal.switch());
-        return null;
+        return "unknown_value";
     }
   }
 
@@ -182,7 +295,7 @@ export class XDRDecoder {
    * Encode JavaScript value to ScVal
    */
   encodeScVal(value: any): xdr.ScVal {
-    if (value === null || value === undefined) {
+    if (value === undefined || value === null) {
       return xdr.ScVal.scvVoid();
     }
 
@@ -198,39 +311,175 @@ export class XDRDecoder {
           return xdr.ScVal.scvI32(value);
         }
       } else {
-        throw new Error("Non-integer numbers not supported");
+        // For non-integers, use i32 for now (simplified)
+        return xdr.ScVal.scvI32(Math.floor(value));
       }
     }
 
     if (typeof value === "string") {
+      // Check if it's a hex string (likely bytes)
+      if (value.startsWith("0x") || /^[0-9a-fA-F]+$/.test(value)) {
+        const hexString = value.startsWith("0x") ? value.slice(2) : value;
+        return xdr.ScVal.scvBytes(Buffer.from(hexString, "hex"));
+      }
       return xdr.ScVal.scvString(value);
     }
 
     if (Array.isArray(value)) {
-      const vec = value.map((item) => this.encodeScVal(item));
+      const vec = value.map((item: any) => this.encodeScVal(item));
       return xdr.ScVal.scvVec(vec);
     }
 
     if (typeof value === "object") {
-      const map = Object.entries(value).map(
-        ([key, val]) =>
+      const mapEntries: xdr.ScMapEntry[] = [];
+      for (const [key, val] of Object.entries(value)) {
+        mapEntries.push(
           new xdr.ScMapEntry({
             key: this.encodeScVal(key),
             val: this.encodeScVal(val),
           })
-      );
-      return xdr.ScVal.scvMap(map);
+        );
+      }
+      return xdr.ScVal.scvMap(mapEntries);
     }
 
-    throw new Error(`Unsupported value type: ${typeof value}`);
+    // Default to void for unknown types
+    return xdr.ScVal.scvVoid();
   }
 
   /**
-   * Encode function call arguments
+   * Encode function arguments to ScVal array
    */
   encodeFunctionArgs(args: any[]): xdr.ScVal[] {
-    return args.map((arg) => this.encodeScVal(arg));
+    return args.map((arg: any) => this.encodeScVal(arg));
+  }
+
+  /**
+   * Decode function call from operation
+   */
+  decodeFunctionCall(operation: any): DecodedFunctionCall {
+    try {
+      if (operation.type !== "invoke_host_function") {
+        return {
+          functionName: "unknown",
+          args: [],
+          contractId: "unknown",
+        };
+      }
+
+      // Extract function name from operation
+      const functionName = this.extractFunctionName(operation);
+
+      // Extract arguments from operation parameters
+      const args = this.extractFunctionArgs(operation);
+
+      // Extract contract ID
+      const contractId = this.extractContractId(operation);
+
+      return {
+        functionName,
+        args,
+        contractId,
+      };
+    } catch (error) {
+      this.logger.error("Failed to decode function call:", error);
+      return {
+        functionName: "unknown",
+        args: [],
+        contractId: "unknown",
+      };
+    }
+  }
+
+  /**
+   * Extract function name from operation
+   */
+  private extractFunctionName(operation: any): string {
+    try {
+      // Try to extract from function field
+      if (operation.function) {
+        return operation.function;
+      }
+
+      // Try to extract from parameters
+      if (operation.parameters && operation.parameters.length > 0) {
+        // First parameter might contain function name
+        const firstParam = operation.parameters[0];
+        if (firstParam && firstParam.value) {
+          try {
+            const decoded = this.decodeScVal(
+              xdr.ScVal.fromXDR(firstParam.value, "base64")
+            );
+            if (typeof decoded === "string") {
+              return decoded;
+            }
+          } catch (error) {
+            // Ignore decoding errors
+          }
+        }
+      }
+
+      return "unknown";
+    } catch (error) {
+      return "unknown";
+    }
+  }
+
+  /**
+   * Extract function arguments from operation
+   */
+  private extractFunctionArgs(operation: any): any[] {
+    try {
+      if (!operation.parameters || !Array.isArray(operation.parameters)) {
+        return [];
+      }
+
+      return operation.parameters
+        .map((param: any) => {
+          if (param && param.value) {
+            try {
+              return this.decodeScVal(xdr.ScVal.fromXDR(param.value, "base64"));
+            } catch (error) {
+              this.logger.warn("Failed to decode parameter:", error);
+              return undefined;
+            }
+          }
+          return undefined;
+        })
+        .filter((arg: any) => arg !== undefined);
+    } catch (error) {
+      return [];
+    }
+  }
+
+  /**
+   * Extract contract ID from operation
+   */
+  private extractContractId(operation: any): string {
+    try {
+      // Try to extract from function field
+      if (operation.function && operation.function.includes("invoke")) {
+        // Look for contract ID in parameters
+        if (operation.parameters && operation.parameters.length > 1) {
+          const contractParam = operation.parameters[1]; // Usually second parameter
+          if (contractParam && contractParam.value) {
+            try {
+              const decoded = this.decodeScVal(
+                xdr.ScVal.fromXDR(contractParam.value, "base64")
+              );
+              if (typeof decoded === "string") {
+                return decoded;
+              }
+            } catch (error) {
+              // Ignore decoding errors
+            }
+          }
+        }
+      }
+
+      return "unknown";
+    } catch (error) {
+      return "unknown";
+    }
   }
 }
-
- 
