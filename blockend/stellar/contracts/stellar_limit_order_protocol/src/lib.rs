@@ -1,6 +1,6 @@
 #![no_std]
 use soroban_sdk::{
-    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, xdr::{ScErrorCode, ScErrorType},
+    contract, contractimpl, contracttype, symbol_short, Address, Bytes, BytesN, Env, Map, Symbol, String, xdr::{ScErrorCode, ScErrorType}, I256, IntoVal, vec, Vec,
 };
 use soroban_sdk::token;
 use soroban_sdk::xdr::ToXdr;
@@ -20,6 +20,34 @@ pub struct Order {
     pub interactions: Bytes,      // Dynamic fields (predicate, etc.)
 }
 
+// Resolver-compatible Order structure (simplified version)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolverOrder {
+    pub salt: u64,
+    pub maker: Address,           // Stellar account
+    pub receiver: Address,        // Stellar account
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
+    pub making_amount: u128,
+    pub taking_amount: u128,
+    pub maker_traits: u128,       // MakerTraits as uint256
+}
+
+// Factory-compatible Order structure (matching Factory's Order struct)
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FactoryOrder {
+    pub salt: u64,
+    pub maker: Address,           // Stellar account
+    pub receiver: Address,        // Stellar account
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
+    pub making_amount: u128,
+    pub taking_amount: u128,
+    pub maker_traits: u128,       // MakerTraits as uint256
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TakerTraits {
@@ -34,6 +62,7 @@ pub struct StellarLimitOrderProtocol;
 impl StellarLimitOrderProtocol {
     const REMAINING_INVALIDATOR: Symbol = symbol_short!("rem_inv");
     const ORDERS: Symbol = symbol_short!("orders");
+    const FACTORY: Symbol = symbol_short!("factory");  // Add factory storage
 
     // Constants matching EVM side
     const ORDER_TYPE_HASH: &'static [u8] = b"Order(uint256 salt,address makerAsset,address takerAsset,address maker,address receiver,address allowedSender,uint256 makingAmount,uint256 takingAmount,uint256 offsets,bytes interactions)";
@@ -41,9 +70,10 @@ impl StellarLimitOrderProtocol {
     const DOMAIN_VERSION: &'static [u8] = b"4";
 
     /// Initialize the contract
-    pub fn initialize(env: &Env) -> Result<(), Error> {
+    pub fn initialize(env: &Env, factory: Address) -> Result<(), Error> {
         env.storage().instance().set(&Self::REMAINING_INVALIDATOR, &Map::<BytesN<32>, u128>::new(env));
         env.storage().instance().set(&Self::ORDERS, &Map::<BytesN<32>, Order>::new(env));
+        env.storage().instance().set(&Self::FACTORY, &factory);  // Store factory address
         Ok(())
     }
 
@@ -90,6 +120,36 @@ impl StellarLimitOrderProtocol {
         env.events().publish(("OrderFilled",), (order_hash.clone(), remaining - amount));
         
         Ok((making_amount, taking_amount, order_hash))
+    }
+
+    /// Fill order with args (equivalent to EVM fillOrderArgs) - RESOLVER COMPATIBILITY
+    pub fn fill_args(
+        env: &Env,
+        resolver_order: ResolverOrder,
+        signature: Bytes,
+        amount: u128,
+        taker_traits: I256,  // Resolver uses I256
+        args: Bytes,         // Cross-chain args
+    ) -> Result<(), Error> {
+        // Convert ResolverOrder to LOP Order
+        let order = Self::convert_resolver_order(env, resolver_order.clone())?;
+        
+        // Extract taker from args (first 32 bytes if _ARGS_HAS_TARGET is set)
+        let taker = Self::extract_taker_from_args(env, &taker_traits, &args)?;
+        
+        // Convert I256 taker_traits to TakerTraits struct
+        let taker_traits_struct = Self::convert_taker_traits(env, &taker_traits)?;
+        
+        // Call the existing fill_order function
+        let (making_amount, taking_amount, order_hash) = Self::fill_order(env, order.clone(), signature.clone(), taker.clone(), amount, taker_traits_struct)?;
+        
+        // Process cross-chain args if needed
+        Self::process_cross_chain_args(env, &args)?;
+        
+        // INTEGRATION: Call factory post_interaction after successful order execution
+        Self::call_factory_post_interaction(env, &resolver_order, &order_hash, &taker, making_amount, taking_amount, &args)?;
+        
+        Ok(())
     }
 
     /// Cancel an order
@@ -195,6 +255,117 @@ impl StellarLimitOrderProtocol {
         }
         Ok(BytesN::from_array(env, &arr))
     }
+
+    // RESOLVER COMPATIBILITY FUNCTIONS
+
+    /// Convert ResolverOrder to LOP Order
+    fn convert_resolver_order(env: &Env, resolver_order: ResolverOrder) -> Result<Order, Error> {
+        // Create a default LOP Order from ResolverOrder
+        // Set missing fields to defaults
+        let maker = resolver_order.maker.clone();
+        let order = Order {
+            salt: resolver_order.salt,
+            maker_asset: resolver_order.maker_asset,
+            taker_asset: resolver_order.taker_asset,
+            maker: maker.clone(),
+            receiver: resolver_order.receiver,
+            allowed_sender: maker, // Use maker as allowed_sender (public order)
+            making_amount: resolver_order.making_amount,
+            taking_amount: resolver_order.taking_amount,
+            offsets: 0, // Default offsets
+            interactions: Bytes::new(env), // Empty interactions
+        };
+        Ok(order)
+    }
+
+    /// Extract taker address from args if _ARGS_HAS_TARGET is set
+    fn extract_taker_from_args(env: &Env, taker_traits: &I256, args: &Bytes) -> Result<Address, Error> {
+        // Check if bit 251 is set (_ARGS_HAS_TARGET flag)
+        // For now, we'll use a simplified approach since I256 doesn't have to_u256()
+        // In a real implementation, you'd need proper bit manipulation
+        let args_has_target = true; // Assume target is always present for cross-chain
+        
+        if args_has_target && args.len() >= 32 {
+            // For now, just use the current contract as taker
+            // In a real implementation, you'd extract and validate the target address
+            Ok(env.current_contract_address())
+        } else {
+            // Use current contract as taker (default behavior)
+            Ok(env.current_contract_address())
+        }
+    }
+
+    /// Convert I256 taker_traits to TakerTraits struct
+    fn convert_taker_traits(_env: &Env, _taker_traits: &I256) -> Result<TakerTraits, Error> {
+        // For now, we'll use default values since I256 doesn't have to_u256()
+        // In a real implementation, you'd need proper bit manipulation
+        let threshold = 0u128; // Default threshold
+        let skip_maker_permit = false; // Default to not skip permit
+        
+        Ok(TakerTraits {
+            threshold,
+            skip_maker_permit,
+        })
+    }
+
+    /// Process cross-chain args for additional functionality
+    fn process_cross_chain_args(env: &Env, args: &Bytes) -> Result<(), Error> {
+        // This function can be extended to handle cross-chain specific logic
+        // For now, we just validate that args are not empty if provided
+        if args.len() > 0 {
+            // Log args for debugging (in production, you'd process them)
+            env.events().publish(("CrossChainArgs",), (args.clone(),));
+        }
+        Ok(())
+    }
+
+    /// INTEGRATION: Call factory post_interaction after successful order execution
+    fn call_factory_post_interaction(
+        env: &Env,
+        resolver_order: &ResolverOrder,
+        order_hash: &BytesN<32>,
+        taker: &Address,
+        making_amount: u128,
+        taking_amount: u128,
+        args: &Bytes,
+    ) -> Result<(), Error> {
+        // Get factory address from storage
+        let factory: Address = env.storage().instance().get(&Self::FACTORY)
+            .ok_or(Error::InvalidArgs)?; // Factory not set
+
+        // Convert ResolverOrder to Factory Order format
+        let factory_order = FactoryOrder {
+            salt: resolver_order.salt,
+            maker: resolver_order.maker.clone(),
+            receiver: resolver_order.receiver.clone(),
+            maker_asset: resolver_order.maker_asset.clone(),
+            taker_asset: resolver_order.taker_asset.clone(),
+            making_amount: resolver_order.making_amount,
+            taking_amount: resolver_order.taking_amount,
+            maker_traits: resolver_order.maker_traits,
+        };
+
+        // Call factory.post_interaction with proper parameters
+        let call_args = vec![
+            env,
+            factory_order.into_val(env),
+            Bytes::new(env).into_val(env), // extension (empty for now)
+            order_hash.clone().into_val(env),
+            taker.clone().into_val(env),
+            making_amount.into_val(env),
+            taking_amount.into_val(env),
+            taking_amount.into_val(env), // remaining_making_amount (same as taking_amount for full fill)
+            args.clone().into_val(env),
+        ];
+
+        let result: Result<soroban_sdk::Val, soroban_sdk::Error> = 
+            env.invoke_contract(&factory, &Symbol::new(env, "post_interaction"), call_args);
+
+        match result {
+            Ok(_) => Ok(()),
+            Err(_) => Err(Error::TransferFailed), // Use TransferFailed for factory call failure
+        }
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -204,6 +375,8 @@ pub enum Error {
     SwapWithZeroAmount,
     BadSignature,
     TransferFailed,
+    InvalidArgs,
+    ConversionFailed,
 }
 
 impl From<Error> for soroban_sdk::Error {
@@ -214,6 +387,8 @@ impl From<Error> for soroban_sdk::Error {
             Error::SwapWithZeroAmount => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
             Error::BadSignature => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
             Error::TransferFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::InvalidArgs => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
+            Error::ConversionFailed => soroban_sdk::Error::from_type_and_code(ScErrorType::Contract, ScErrorCode::InvalidInput),
         }
     }
 }

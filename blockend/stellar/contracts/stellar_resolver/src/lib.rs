@@ -3,6 +3,20 @@ use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, vec, Address, Bytes, BytesN, Env, IntoVal, Symbol, Vec, String, xdr::{ScErrorCode, ScErrorType, ToXdr}, token::TokenClient, I256,
 };
 
+// Define ResolverOrder locally to avoid import issues
+#[contracttype]
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ResolverOrder {
+    pub salt: u64,
+    pub maker: Address,           // Stellar account
+    pub receiver: Address,        // Stellar account
+    pub maker_asset: Address,     // Stellar asset contract
+    pub taker_asset: Address,     // Stellar asset contract  
+    pub making_amount: u128,
+    pub taking_amount: u128,
+    pub maker_traits: u128,       // MakerTraits as uint256
+}
+
 #[contracttype]
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Order {
@@ -290,9 +304,21 @@ impl StellarResolver {
         taker_traits: &TakerTraits,
         args: &Bytes,
     ) -> Result<(), Error> {
+        // Convert Resolver Order to LOP ResolverOrder
+        let lop_order = ResolverOrder {
+            salt: order.salt,
+            maker: order.maker.clone(),
+            receiver: order.receiver.clone(),
+            maker_asset: order.maker_asset.clone(),
+            taker_asset: order.taker_asset.clone(),
+            making_amount: order.making_amount,
+            taking_amount: order.taking_amount,
+            maker_traits: order.maker_traits,
+        };
+        
         let args = vec![
             env,
-            order.clone().into_val(env),
+            lop_order.into_val(env),
             signature.clone().into_val(env),
             (*amount).into_val(env),
             taker_traits.clone().into_val(env),

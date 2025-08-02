@@ -159,14 +159,16 @@ pub enum Error {
     SafetyDepositFailed = 9,
     /// Token transfer failed
     TokenTransferFailed = 10,
+    /// Insufficient balance for escrow creation
+    InsufficientBalance = 11,
 }
 
 #[contractimpl] 
 impl FusionPlusEscrow {
-    /// Initialize a new escrow instance (called by factory)
-    /// This sets the immutable parameters exactly like EVM constructor
+    /// Initialize the escrow with immutable parameters
+    /// This function can only be called once per contract instance
     pub fn initialize(env: Env, params: InitParams) -> Result<(), Error> {
-        // Ensure single initialization (like EVM constructor)
+        // Check if already initialized
         if env.storage().instance().has(&DataKey::Immutables) {
             return Err(Error::AlreadyInitialized);
         }
@@ -176,31 +178,11 @@ impl FusionPlusEscrow {
             return Err(Error::InvalidParams);
         }
 
-        // Ensure proper timelock ordering (matching EVM 7-stage logic)
-        if params.timelocks.src_withdrawal <= params.timelocks.finality {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.src_public_withdrawal <= params.timelocks.src_withdrawal {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.src_cancellation <= params.timelocks.src_public_withdrawal {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.src_public_cancellation <= params.timelocks.src_cancellation {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.dst_withdrawal <= params.timelocks.finality {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.dst_public_withdrawal <= params.timelocks.dst_withdrawal {
-            return Err(Error::InvalidParams);
-        }
-        if params.timelocks.dst_cancellation <= params.timelocks.dst_public_withdrawal {
-            return Err(Error::InvalidParams);
-        }
+        // CRITICAL: Verify maker has sufficient balance before escrow creation
+        Self::verify_maker_balance(&env, &params.token, &params.maker, params.amount)?;
 
+        // Validate timelock ordering (7-stage timelock)
         let deployed_at = env.ledger().timestamp();
-        
         let timelocks = Timelocks {
             finality: params.timelocks.finality,
             src_withdrawal: params.timelocks.src_withdrawal,
@@ -213,6 +195,30 @@ impl FusionPlusEscrow {
             deployed_at,
         };
 
+        // Validate timelock ordering
+        if timelocks.src_withdrawal <= timelocks.finality {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_public_withdrawal <= timelocks.src_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_cancellation <= timelocks.src_public_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.src_public_cancellation <= timelocks.src_cancellation {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_withdrawal <= timelocks.finality {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_public_withdrawal <= timelocks.dst_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+        if timelocks.dst_cancellation <= timelocks.dst_public_withdrawal {
+            return Err(Error::InvalidParams);
+        }
+
+        // Create immutables
         let immutables = Immutables {
             order_hash: params.order_hash.clone(),
             hash_lock: params.hash_lock.clone(),
@@ -224,19 +230,14 @@ impl FusionPlusEscrow {
             timelocks: timelocks.clone(),
         };
 
-        // Store immutable data (equivalent to EVM constructor storage)
+        // Store immutables
         env.storage().instance().set(&DataKey::Immutables, &immutables);
-        
+
         // Initialize state
         env.storage().instance().set(&DataKey::Withdrawn, &false);
         env.storage().instance().set(&DataKey::Cancelled, &false);
 
-        // Calculate actual timestamps for events (matching EVM)
-        let finality_time = deployed_at + params.timelocks.finality as u64;
-        let withdrawal_time = deployed_at + params.timelocks.src_withdrawal as u64;
-        let cancellation_time = deployed_at + params.timelocks.src_cancellation as u64;
-
-        // Emit creation event matching EVM exactly
+        // Emit escrow created event
         env.events().publish(
             (String::from_str(&env, "EscrowCreated"),),
             EscrowCreatedEvent {
@@ -247,9 +248,9 @@ impl FusionPlusEscrow {
                 token: params.token,
                 amount: params.amount,
                 safety_deposit: params.safety_deposit,
-                finality_time,
-                withdrawal_time,
-                cancellation_time,
+                finality_time: deployed_at + timelocks.finality as u64,
+                withdrawal_time: deployed_at + timelocks.src_withdrawal as u64,
+                cancellation_time: deployed_at + timelocks.src_cancellation as u64,
             }
         );
 
@@ -270,22 +271,16 @@ impl FusionPlusEscrow {
         }
 
         // Transfer tokens from maker to contract
-        // Handle both native XLM and token contracts
-        if Self::is_native_token(&immutables.token) {
-            // For native XLM, the transfer happens via contract invocation funding
-            // The calling transaction must include the amount + safety_deposit
-        } else {
-            // Transfer tokens via token contract
-            let token_client = token::Client::new(&env, &immutables.token);
-            token_client.transfer(
-                &immutables.maker, 
-                &env.current_contract_address(), 
-                &immutables.amount
-            );
-        }
+        // Use the same pattern as other contracts - all tokens use token::Client
+        let token_client = token::Client::new(&env, &immutables.token);
+        token_client.transfer(
+            &immutables.maker, 
+            &env.current_contract_address(), 
+            &immutables.amount
+        );
 
-        // Safety deposit is always handled separately in native XLM
-        // This should be transferred with the contract call
+        // Note: Safety deposit should be transferred separately via contract invocation funding
+        // This is handled by the caller when invoking this function
 
         Ok(())
     }
@@ -565,40 +560,32 @@ impl FusionPlusEscrow {
         Ok(env.storage().instance().get(&DataKey::Cancelled).unwrap_or(false))
     }
 
-    fn is_native_token(_token: &Address) -> bool {
-        // In Soroban, native XLM is represented by the Stellar Asset Contract (SAC)
-        // The native XLM token contract has a deterministic address
-        // The native XLM SAC address is: "CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA"
-        
-        // For now, we'll use a simple check - in production, you'd compare against the actual native XLM SAC address:
-        // *token == Address::from_string("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA")
-        // For safety, assume all tokens are token contracts for now
-        false
+    fn is_native_token(env: &Env, token: &Address) -> bool {
+        // In Soroban, native XLM is represented by the string "native"
+        // This is the standard way to identify native XLM in Soroban
+        let native_address = Address::from_string(&String::from_str(env, "native"));
+        *token == native_address
     }
 
     fn transfer_tokens(env: &Env, immutables: &Immutables, to: &Address) -> Result<(), Error> {
-        // In Soroban, ALL token transfers (including native XLM) use the same token::Client interface
-        // Native XLM is handled through its Stellar Asset Contract (SAC)
+        // Use the same pattern as other contracts - all tokens (including native XLM) use token::Client
         let token_client = token::Client::new(env, &immutables.token);
         
+        // Transfer tokens from escrow to recipient
         // This works for both native XLM and custom tokens since native XLM has its own SAC
         token_client.transfer(&env.current_contract_address(), to, &immutables.amount);
         
         Ok(())
     }
 
-    fn transfer_native(_env: &Env, _to: &Address, _amount: i128) -> Result<(), Error> {
-        // In Soroban, native XLM transfers also use token::Client
-        // The native XLM has its own Stellar Asset Contract (SAC) address
-        // This function is kept for API compatibility but uses the same pattern
+    fn transfer_native(env: &Env, to: &Address, amount: i128) -> Result<(), Error> {
+        // Use the same pattern as the Resolver - native XLM uses the "native" address
+        let native = Address::from_string(&String::from_str(env, "native"));
+        let token_client = token::Client::new(env, &native);
         
-        // For native XLM, we would need the native XLM SAC address
-        // In a real implementation, this would be:
-        // let native_xlm_address = Address::from_string("CAS3J7GYLGXMF6TDJBBYYSE3HQ6BBSMLNUQ34T6TZMYMW2EVH34XOWMA");
-        // let token_client = token::Client::new(env, &native_xlm_address);
-        // token_client.transfer(&env.current_contract_address(), to, &amount);
+        // Transfer native XLM from escrow to recipient
+        token_client.transfer(&env.current_contract_address(), to, &amount);
         
-        // For now, this is a placeholder that assumes the caller will use transfer_tokens
         Ok(())
     }
 
@@ -606,6 +593,25 @@ impl FusionPlusEscrow {
         // Convert BytesN<32> to Bytes and use Soroban's keccak256 function
         let bytes = Bytes::from_array(env, &data.to_array());
         env.crypto().keccak256(&bytes)
+    }
+
+    fn verify_maker_balance(env: &Env, token: &Address, maker: &Address, amount: i128) -> Result<(), Error> {
+        if Self::is_native_token(env, token) {
+            // For native XLM, check if maker has enough XLM
+            let native_client = token::Client::new(env, &Address::from_string(&String::from_str(env, "native")));
+            let maker_balance = native_client.balance(&maker);
+            if maker_balance < amount {
+                return Err(Error::InsufficientBalance);
+            }
+        } else {
+            // For custom tokens, check if maker has enough tokens
+            let token_client = token::Client::new(env, token);
+            let maker_balance = token_client.balance(&maker);
+            if maker_balance < amount {
+                return Err(Error::InsufficientBalance);
+            }
+        }
+        Ok(())
     }
 }
 
