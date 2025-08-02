@@ -4,6 +4,8 @@ import { stellarContract } from "../lib/stellar-contract";
 import { connect, disconnect, getPublicKey, kit } from "../lib/stellar-wallets-kit";
 import * as Client from "../packages/create_escrow/dist";
 import * as xdr from "@stellar/stellar-base";
+import Server from "@stellar/stellar-sdk";
+import FreighterApi, { signAuthEntry, signTransaction } from "@stellar/freighter-api";
 
 export default function EscrowTestPage() {
   const [result, setResult] = useState<any>(null);
@@ -93,9 +95,9 @@ export default function EscrowTestPage() {
       const params = {
         orderHash: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
         hashLock: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-        maker: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        taker: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-        token: "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+        maker: walletAddress,
+        taker: walletAddress,
+        token: walletAddress,
         amount: "1000000000",
         safetyDeposit: "100000000",
         timelocks: {
@@ -114,7 +116,12 @@ export default function EscrowTestPage() {
         ...Client.networks.testnet,
         rpcUrl: "https://soroban-testnet.stellar.org",
         signTransaction: async (tx: string) => {
-          return await kit.signTransaction(tx);
+          const { address } = await kit.getAddress();
+          const { signedTxXdr } = await kit.signTransaction(tx, {
+            address,
+            networkPassphrase: 'Test SDF Network ; September 2015'
+          });
+          return { signedTxXdr, signerAddress: address };
         },
       });
       
@@ -142,6 +149,7 @@ export default function EscrowTestPage() {
         dst_cancellation_delay: 80,
       };
       const response = await contract.create_src_escrow({
+
         order_hash: orderHashBuffer,
         hash_lock: hashLockBuffer,
         maker: makerAddress,
@@ -154,8 +162,15 @@ export default function EscrowTestPage() {
       
       // Log the full response for debugging
       console.log("Contract Response:", response);
+
+// Now sign with Freighter
+// const signedXDR = await FreighterApi.signTransaction(response.toXDR(), {
+//     networkPassphrase: 'Test SDF Network ; September 2015'
+// }); 
+      // Check if additional signatu
+      // res are needed
+      // console.log("Signed XDR:", signedXDR);
       
-      // Check if additional signatures are needed
       const whoElseNeedsToSign = response.needsNonInvokerSigningBy();
       console.log("Who else needs to sign:", whoElseNeedsToSign);
       
@@ -165,18 +180,53 @@ export default function EscrowTestPage() {
         try {
           await response.signAuthEntries({
             address: whoElseNeedsToSign[0],
-            signAuthEntry: async (entry: any) => {
-              console.log("Signing auth entry:", entry);
-              // Sign the authorization entry using the wallet kit
-              const signedResult = await kit.signTransaction(entry);
-              console.log("Signed result:", signedResult);
-              // Return the signed authorization entry in the expected format
-              return {
-                signedAuthEntry: signedResult.signedTxXdr,
-                signerAddress: walletAddress
-              };
+            signAuthEntry: async (preimageXDR: string, options?: { networkPassphrase?: string; address?: string }) => {
+              console.log("Signing auth entry preimage:", preimageXDR);
+              
+              try {
+                const signedResult = await signAuthEntry(preimageXDR, {
+                  networkPassphrase: 'Test SDF Network ; September 2015'
+                });
+                
+                console.log("Signed result:", signedResult);
+                
+                // The signedAuthEntry is a serialized Buffer object: {type: 'Buffer', data: Array}
+                // We need to reconstruct the Buffer and convert it to base64
+                let signedAuthEntryBase64: string;
+                
+                if (signedResult?.signedAuthEntry?.type === 'Buffer' && signedResult?.signedAuthEntry?.data) {
+                  // Reconstruct the Buffer from the serialized format
+                  const buffer = Buffer.from(signedResult?.signedAuthEntry?.data);
+                  signedAuthEntryBase64 = buffer.toString('base64');
+                  
+                  console.log("Reconstructed buffer:", buffer);
+                  console.log("Buffer as base64:", signedAuthEntryBase64);
+                } else {
+                  throw new Error("Unexpected signedAuthEntry format");
+                }
+                
+                return {
+                  signedAuthEntry: signedAuthEntryBase64,
+                  signerAddress: whoElseNeedsToSign[0]
+                };
+              } catch (error) {
+                console.error("Error signing auth entry:", error);
+                throw error;
+              }
+            }
+              });
+       console.log("Auth entries signed successfully");
+          
+          const result = await response.signAndSend({
+
+            signTransaction: async (tx: string) => {
+              return { signedTxXdr: tx, signerAddress: whoElseNeedsToSign[0] };
             }
           });
+
+          console.log("Auth entries signed successfully");
+         
+          console.log("Submitted Transaction:", result);
           console.log("Auth entries signed successfully");
         } catch (signError) {
           console.error("Error signing auth entries:", signError);
@@ -248,7 +298,12 @@ export default function EscrowTestPage() {
         ...Client.networks.testnet,
         rpcUrl: "https://soroban-testnet.stellar.org",
         signTransaction: async (tx: string) => {
-          return await kit.signTransaction(tx);
+          const { address } = await kit.getAddress();
+          const { signedTxXdr } = await kit.signTransaction(tx, {
+            address,
+            networkPassphrase: 'Test SDF Network ; September 2015'
+          });
+          return { signedTxXdr, signerAddress: address };
         },
       });
       
@@ -306,7 +361,12 @@ export default function EscrowTestPage() {
         ...Client.networks.testnet,
         rpcUrl: "https://soroban-testnet.stellar.org",
         signTransaction: async (tx: string) => {
-          return await kit.signTransaction(tx);
+          const { address } = await kit.getAddress();
+          const { signedTxXdr } = await kit.signTransaction(tx, {
+            address,
+            networkPassphrase: 'Test SDF Network ; September 2015'
+          });
+          return { signedTxXdr, signerAddress: address };
         },
       });
       
@@ -336,7 +396,12 @@ export default function EscrowTestPage() {
         ...Client.networks.testnet,
         rpcUrl: "https://soroban-testnet.stellar.org",
         signTransaction: async (tx: string) => {
-          return await kit.signTransaction(tx);
+          const { address } = await kit.getAddress();
+          const { signedTxXdr } = await kit.signTransaction(tx, {
+            address,
+            networkPassphrase: 'Test SDF Network ; September 2015'
+          });
+          return { signedTxXdr, signerAddress: address };
         },
       });
       
