@@ -1,7 +1,6 @@
 /**
- * @fileoverview Stellar event monitor for escrow creation and lifecycle events
+ * Monitors Stellar events related to escrow creation and lifecycle
  */
-
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { StellarProvider } from "../services/StellarProvider";
@@ -13,9 +12,6 @@ export interface StellarEventMonitorConfig {
   pollInterval: number;
 }
 
-/**
- * Monitor Stellar events for escrow creation and lifecycle
- */
 export class StellarEventMonitor {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
@@ -28,117 +24,127 @@ export class StellarEventMonitor {
     this.stellarProvider = new StellarProvider();
   }
 
-  /**
-   * Start monitoring Stellar events
-   */
   async start(): Promise<void> {
-    this.logger.info("Starting Stellar event monitor...");
+    if (this.running) {
+      this.logger.warn("StellarEventMonitor is already running");
+      return;
+    }
+
+    this.logger.info("Starting StellarEventMonitor...");
+    this.running = true;
 
     try {
-      // Get current ledger number
-      const currentLedger = await this.stellarProvider.getCurrentLedger();
-      this.lastProcessedLedger = Math.max(0, currentLedger - 10); // Start 10 ledgers back for safety
-
-      this.logger.info("Stellar event monitor started", {
-        currentLedger,
-        startLedger: this.lastProcessedLedger,
-      });
-
-      this.running = true;
-
-      // Start monitoring contract events
+      // Start monitoring for new events
       this.startEventMonitoring();
 
-      // Start periodic ledger sync
+      // Start syncing historical ledgers
       this.startLedgerSync();
+
+      this.logger.info("StellarEventMonitor started successfully");
     } catch (error) {
-      this.logger.error("Failed to start Stellar event monitor:", error);
+      this.running = false;
+      this.logger.error("Failed to start StellarEventMonitor:", error);
       throw error;
     }
   }
 
-  /**
-   * Stop monitoring Stellar events
-   */
   async stop(): Promise<void> {
-    this.logger.info("Stopping Stellar event monitor...");
+    if (!this.running) {
+      this.logger.warn("StellarEventMonitor is not running");
+      return;
+    }
+
+    this.logger.info("Stopping StellarEventMonitor...");
     this.running = false;
 
-    // Close event streams
     if (this.eventStreamCloser) {
       this.eventStreamCloser();
+      this.eventStreamCloser = undefined;
     }
 
-    this.logger.info("Stellar event monitor stopped");
+    this.logger.info("StellarEventMonitor stopped successfully");
   }
 
-  /**
-   * Start monitoring contract events
-   */
   private startEventMonitoring(): void {
-    try {
-      // Simplified event monitoring for now
-      // In practice, you'd set up proper event streaming
-      this.logger.info("Started event monitoring");
-    } catch (error) {
-      this.logger.error("Stellar event stream error:", error);
-      // Attempt to reconnect
-      if (this.running) {
-        setTimeout(() => {
-          this.startEventMonitoring();
-        }, 5000);
+    // For now, we'll use a simplified polling approach
+    // In production, you might want to use Stellar's streaming API
+    const pollInterval = 5000; // 5 seconds
+
+    const poll = async () => {
+      if (!this.running) return;
+
+      try {
+        // Get the latest ledger
+        const latestLedger = await this.stellarProvider.getCurrentLedger();
+
+        if (latestLedger > this.lastProcessedLedger) {
+          await this.syncLedgersBetween(
+            this.lastProcessedLedger + 1,
+            latestLedger
+          );
+          this.lastProcessedLedger = latestLedger;
+        }
+      } catch (error) {
+        this.logger.error("Error polling Stellar events:", error);
       }
-    }
+
+      // Schedule next poll
+      setTimeout(poll, pollInterval);
+    };
+
+    poll();
   }
 
-  /**
-   * Start periodic ledger sync
-   */
   private startLedgerSync(): void {
     const syncLedgers = async () => {
       if (!this.running) return;
 
       try {
-        const currentLedger = await this.stellarProvider.getCurrentLedger();
+        // Get the latest ledger
+        const latestLedger = await this.stellarProvider.getCurrentLedger();
 
-        if (currentLedger > this.lastProcessedLedger) {
+        // If we haven't processed any ledgers yet, start from the latest
+        if (this.lastProcessedLedger === 0) {
+          this.lastProcessedLedger = latestLedger;
+          this.logger.info(
+            `Starting Stellar monitoring from ledger ${latestLedger}`
+          );
+        } else if (latestLedger > this.lastProcessedLedger) {
+          // Process new ledgers
           await this.syncLedgersBetween(
             this.lastProcessedLedger + 1,
-            currentLedger
+            latestLedger
           );
-          this.lastProcessedLedger = currentLedger;
+          this.lastProcessedLedger = latestLedger;
         }
       } catch (error) {
-        this.logger.error("Error during ledger sync:", error);
+        this.logger.error("Error syncing Stellar ledgers:", error);
       }
 
       // Schedule next sync
-      if (this.running) {
-        setTimeout(syncLedgers, 5000); // 5 second default
-      }
+      setTimeout(syncLedgers, 5000);
     };
 
-    // Start the sync loop
     syncLedgers();
   }
 
   /**
-   * Sync ledgers between from and to
+   * Sync ledgers between fromLedger and toLedger
    */
   private async syncLedgersBetween(
     fromLedger: number,
     toLedger: number
   ): Promise<void> {
-    try {
-      this.logger.debug("Syncing ledgers", { fromLedger, toLedger });
+    this.logger.debug(`Syncing Stellar ledgers ${fromLedger} to ${toLedger}`);
 
-      // Simplified ledger sync for now
-      // In practice, you'd fetch and process all operations in the ledger range
-      for (let ledgerSeq = fromLedger; ledgerSeq <= toLedger; ledgerSeq++) {
+    for (let ledgerSeq = fromLedger; ledgerSeq <= toLedger; ledgerSeq++) {
+      if (!this.running) break;
+
+      try {
         await this.processLedger(ledgerSeq);
+      } catch (error) {
+        this.logger.error(`Error processing ledger ${ledgerSeq}:`, error);
       }
-    } catch (error) {
-      this.logger.error("Error syncing ledgers:", error);
     }
   }
 
@@ -147,16 +153,19 @@ export class StellarEventMonitor {
    */
   private async processLedger(ledgerSeq: number): Promise<void> {
     try {
-      // Simplified ledger processing for now
-      // In practice, you'd fetch operations and filter for contract calls
-      this.logger.debug("Processing ledger", { ledgerSeq });
+      // For now, we'll use a simplified approach
+      // In practice, you'd fetch operations for the specific ledger
+      this.logger.debug(`Processing ledger ${ledgerSeq}`);
+
+      // Placeholder: In a real implementation, you'd fetch operations for this ledger
+      // and filter for contract invocations
     } catch (error) {
-      this.logger.error("Error processing ledger:", error);
+      this.logger.error(`Error processing ledger ${ledgerSeq}:`, error);
     }
   }
 
   /**
-   * Get current status
+   * Get the current status of the monitor
    */
   async getStatus(): Promise<{
     running: boolean;
@@ -169,268 +178,6 @@ export class StellarEventMonitor {
       lastProcessedLedger: this.lastProcessedLedger,
       horizonUrl: this.config.stellar.horizonUrl,
       providerConnected: await this.stellarProvider.isConnected(),
-    };
-  }
-}
-
-  private isEscrowFactoryOperation(
-    operation: Horizon.ServerApi.OperationRecord
-  ): boolean {
-    // Check if it's an invoke contract operation
-    if (operation.type !== "invoke_host_function") {
-      return false;
-    }
-
-    const invokeOp =
-      operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse;
-
-    // Check if the contract being called is our escrow factory
-    // Note: You'll need to adapt this based on how Stellar contract calls are structured
-    return (
-      invokeOp.source_account === this.config.contracts.stellar.escrowFactory ||
-      (invokeOp as any).contract === this.config.contracts.stellar.escrowFactory
-    );
-  }
-
-  /**
-   * Handle a Stellar operation
-   */
-  private async handleOperation(
-    operation: Horizon.ServerApi.OperationRecord
-  ): Promise<void> {
-    try {
-      if (operation.type === "invoke_host_function") {
-        await this.handleContractInvocation(
-          operation as Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-        );
-      }
-    } catch (error) {
-      this.logger.error("Error handling Stellar operation:", error);
-    }
-  }
-
-  /**
-   * Handle contract invocation operations
-   */
-  private async handleContractInvocation(
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): Promise<void> {
-    try {
-      // Get the transaction details to access events
-      const transaction = await this.server
-        .transactions()
-        .transaction(operation.transaction_hash)
-        .call();
-
-      // Parse contract events from the transaction
-      await this.parseContractEvents(transaction, operation);
-    } catch (error) {
-      this.logger.error("Error handling contract invocation:", error);
-    }
-  }
-
-  /**
-   * Parse contract events from a transaction
-   */
-  private async parseContractEvents(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): Promise<void> {
-    try {
-      // Note: This is a simplified implementation
-      // In practice, you'll need to decode the XDR data to extract contract events
-      // Stellar contract events are embedded in the transaction result XDR
-
-      // For now, we'll use a simplified approach where we check the operation function name
-      // and extract parameters to determine if an escrow was created
-
-      const functionName = this.extractFunctionName(operation);
-
-      if (functionName === "create_escrow") {
-        await this.handleEscrowCreatedEvent(transaction, operation);
-      } else if (functionName === "withdraw") {
-        await this.handleWithdrawalEvent(transaction, operation);
-      } else if (functionName === "cancel") {
-        await this.handleCancellationEvent(transaction, operation);
-      }
-    } catch (error) {
-      this.logger.error("Error parsing contract events:", error);
-    }
-  }
-
-  /**
-   * Extract function name from contract invocation
-   */
-  private extractFunctionName(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // This is a placeholder implementation
-    // In practice, you'd decode the XDR to get the actual function name
-
-    // For now, we'll try to infer from operation parameters or metadata
-    // You'll need to implement proper XDR decoding here
-
-    return "unknown";
-  }
-
-  /**
-   * Handle escrow created event
-   */
-  private async handleEscrowCreatedEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): Promise<void> {
-    try {
-      // Extract escrow parameters from the operation
-      // This is a simplified implementation - you'd need to decode XDR properly
-
-      // TODO: Properly decode Stellar event XDR to extract complete timelock information
-      // For now, using placeholder values - this needs proper XDR decoding implementation
-      const escrowEvent: EscrowCreatedEvent = {
-        hashLock: this.extractHashLock(operation),
-        orderHash: "0x" + "0".repeat(64), // TODO: Extract from XDR
-        maker: operation.source_account,
-        taker: this.extractResolver(operation),
-        token: this.extractToken(operation),
-        amount: this.extractAmount(operation),
-        safetyDeposit: this.extractSafetyDeposit(operation),
-        timelocks: {
-          // TODO: Extract actual timelock values from Stellar event XDR
-          finality: 300, // 5 minutes
-          srcWithdrawal: 3600, // 1 hour
-          srcPublicWithdrawal: 7200, // 2 hours
-          srcCancellation: 14400, // 4 hours
-          srcPublicCancellation: 21600, // 6 hours
-          dstWithdrawal: 3600, // 1 hour
-          dstPublicWithdrawal: 7200, // 2 hours
-          dstCancellation: 28800, // 8 hours
-          deployedAt: new Date(transaction.created_at).getTime(),
-        },
-        chain: "stellar",
-        transactionHash: transaction.hash,
-        timestamp: new Date(transaction.created_at).getTime(),
-      };
-
-      this.logger.info("Detected Stellar escrow creation", {
-        hashLock: escrowEvent.hashLock,
-        transactionHash: transaction.hash,
-        ledger: transaction.ledger_attr,
-      });
-
-      // Emit to relayer service
-      this.relayerService.emit("escrowCreated", escrowEvent);
-    } catch (error) {
-      this.logger.error("Error processing escrow created event:", error);
-    }
-  }
-
-  /**
-   * Handle withdrawal event
-   */
-  private async handleWithdrawalEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): Promise<void> {
-    try {
-      const hashLock = this.extractHashLock(operation);
-      const secret = this.extractSecret(operation);
-
-      this.logger.info("Detected Stellar withdrawal", {
-        hashLock,
-        transactionHash: transaction.hash,
-      });
-
-      this.relayerService.emit("withdrawal", {
-        hashLock,
-        chain: "stellar",
-        secret,
-        transactionHash: transaction.hash,
-      });
-    } catch (error) {
-      this.logger.error("Error processing withdrawal event:", error);
-    }
-  }
-
-  /**
-   * Handle cancellation event
-   */
-  private async handleCancellationEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): Promise<void> {
-    try {
-      const hashLock = this.extractHashLock(operation);
-
-      this.logger.info("Detected Stellar cancellation", {
-        hashLock,
-        transactionHash: transaction.hash,
-      });
-
-      this.relayerService.emit("cancellation", {
-        hashLock,
-        chain: "stellar",
-        transactionHash: transaction.hash,
-      });
-    } catch (error) {
-      this.logger.error("Error processing cancellation event:", error);
-    }
-  }
-
-  // Placeholder extraction methods - implement proper XDR decoding
-  private extractHashLock(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "0x" + "0".repeat(64); // Placeholder
-  }
-
-  private extractResolver(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
-  }
-
-  private extractToken(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
-  }
-
-  private extractAmount(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "1000000"; // Placeholder
-  }
-
-  private extractSafetyDeposit(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "100000"; // Placeholder
-  }
-
-  private extractSecret(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
-    return "0x" + "0".repeat(64); // Placeholder
-  }
-
-  /**
-   * Get current status
-   */
-  getStatus(): {
-    running: boolean;
-    lastProcessedLedger: number;
-    horizonUrl: string;
-  } {
-    return {
-      running: this.running,
-      lastProcessedLedger: this.lastProcessedLedger,
-      horizonUrl: this.config.stellar.horizonUrl,
     };
   }
 }
