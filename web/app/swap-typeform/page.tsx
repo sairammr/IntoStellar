@@ -6,9 +6,19 @@ import InterstellarButton from '../components/InterstellarButton';
 interface SwapForm {
   fromAsset: string;
   fromAmount: string;
-  toAsset: string;
-  slippage: number;
   walletAddress: string;
+}
+
+interface ConversionRate {
+  fromAmount: string;
+  toAmount: string;
+  rate: string;
+  gasEstimate: string;
+  ethPriceUSD?: string;
+  xlmPriceUSD?: string;
+  source?: string;
+  loading: boolean;
+  error: string | null;
 }
 
 interface Question {
@@ -29,23 +39,9 @@ const questions: Question[] = [
   },
   {
     id: 'fromAmount',
-    title: 'How much do you want to swap?',
-    subtitle: 'Enter the amount you want to convert',
+    title: 'How much ETH do you want to swap?',
+    subtitle: 'Enter the amount of ETH you want to convert to XLM',
     type: 'amount'
-  },
-  {
-    id: 'toAsset',
-    title: 'What are you swapping TO?',
-    subtitle: 'Select the destination asset (Stellar)',
-    type: 'asset',
-    options: ['XLM']
-  },
-  {
-    id: 'slippage',
-    title: 'What slippage tolerance do you prefer?',
-    subtitle: 'Higher tolerance = faster execution, Lower tolerance = better rates',
-    type: 'slippage',
-    options: ['0.1%', '0.5%', '1.0%', '2.0%']
   },
   {
     id: 'wallet',
@@ -56,7 +52,7 @@ const questions: Question[] = [
   {
     id: 'confirm',
     title: 'Ready to transcend dimensions?',
-    subtitle: 'Review your swap details before proceeding',
+    subtitle: 'Review your swap details and conversion rate before proceeding',
     type: 'confirm'
   }
 ];
@@ -66,9 +62,15 @@ export default function SwapTypeformPage() {
   const [swapForm, setSwapForm] = useState<SwapForm>({
     fromAsset: '',
     fromAmount: '',
-    toAsset: 'XLM',
-    slippage: 0.5,
     walletAddress: ''
+  });
+  const [conversionRate, setConversionRate] = useState<ConversionRate>({
+    fromAmount: '',
+    toAmount: '',
+    rate: '',
+    gasEstimate: '',
+    loading: false,
+    error: null
   });
   const [isLoading, setIsLoading] = useState(false);
   const [swapStatus, setSwapStatus] = useState<string>('');
@@ -95,7 +97,24 @@ export default function SwapTypeformPage() {
         
         // Check if current question is answered
         const currentQuestion = questions[currentStep];
-        const hasAnswer = swapForm[currentQuestion.id as keyof SwapForm];
+        let hasAnswer = false;
+        
+        switch (currentQuestion.type) {
+          case 'asset':
+            hasAnswer = !!swapForm.fromAsset;
+            break;
+          case 'amount':
+            hasAnswer = !!swapForm.fromAmount && parseFloat(swapForm.fromAmount) > 0;
+            break;
+          case 'wallet':
+            hasAnswer = !!swapForm.walletAddress && swapForm.walletAddress.length > 0;
+            break;
+          case 'confirm':
+            hasAnswer = true; // Always valid on confirm step
+            break;
+          default:
+            hasAnswer = false;
+        }
         
         if (hasAnswer) {
           if (currentStep < questions.length - 1) {
@@ -132,6 +151,11 @@ export default function SwapTypeformPage() {
       ...prev,
       [currentQuestion.id]: value
     }));
+
+    // Fetch conversion rate when amount changes
+    if (currentQuestion.id === 'fromAmount' && typeof value === 'string') {
+      getConversionRate(value);
+    }
   };
 
   const hasValidAnswer = () => {
@@ -142,14 +166,58 @@ export default function SwapTypeformPage() {
         return !!swapForm[currentQuestion.id as keyof SwapForm];
       case 'amount':
         return !!swapForm.fromAmount && parseFloat(swapForm.fromAmount) > 0;
-      case 'slippage':
-        return !!swapForm.slippage;
       case 'wallet':
         return !!swapForm.walletAddress && swapForm.walletAddress.length > 0;
       case 'confirm':
         return true; // Always valid on confirm step
       default:
         return false;
+    }
+  };
+
+  // 1inch API integration via our API route
+  const getConversionRate = async (amount: string) => {
+    if (!amount || parseFloat(amount) <= 0) {
+      setConversionRate(prev => ({ ...prev, loading: false, error: null }));
+      return;
+    }
+
+    setConversionRate(prev => ({ ...prev, loading: true, error: null }));
+
+    try {
+      // Call our API route instead of 1inch directly
+      const response = await fetch(`/api/1inch/quote?amount=${amount}`);
+
+      if (!response.ok) {
+        throw new Error('Failed to fetch conversion rate');
+      }
+
+      const result = await response.json();
+      
+      if (result.error) {
+        throw new Error(result.error);
+      }
+
+      const { data } = result;
+      
+      setConversionRate({
+        fromAmount: data.fromAmount,
+        toAmount: data.toAmount,
+        rate: data.rate,
+        gasEstimate: data.gasEstimate.toString(),
+        ethPriceUSD: data.ethPriceUSD?.toString(),
+        xlmPriceUSD: data.xlmPriceUSD?.toString(),
+        source: data.source,
+        loading: false,
+        error: null
+      });
+    } catch (error) {
+      console.error('Error fetching conversion rate:', error);
+      setConversionRate(prev => ({
+        ...prev,
+        loading: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch rate'
+      }));
     }
   };
 
@@ -179,17 +247,22 @@ export default function SwapTypeformPage() {
             {currentQuestion.options?.map((option) => (
               <button
                 key={option}
-                onClick={() => handleInputChange(option)}
+                onClick={() => option === 'ETH' ? handleInputChange(option) : null}
+                disabled={option !== 'ETH'}
                 className={`
                   p-4 rounded-lg border-2 transition-all duration-300
-                  ${swapForm[currentQuestion.id as keyof SwapForm] === option
-                    ? 'border-white/50 bg-white/10 text-white'
-                    : 'border-white/20 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10'
+                  ${option === 'ETH' 
+                    ? swapForm.fromAsset === option
+                      ? 'border-white/50 bg-white/10 text-white'
+                      : 'border-white/20 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10'
+                    : 'border-white/10 bg-white/5 text-white/30 cursor-not-allowed opacity-50'
                   }
                 `}
               >
                 <div className="text-lg font-bold mb-1">{option}</div>
-                <div className="text-xs opacity-70">Asset</div>
+                <div className="text-xs opacity-70">
+                  {option === 'ETH' ? 'Available' : 'Coming Soon'}
+                </div>
               </button>
             ))}
           </div>
@@ -209,25 +282,7 @@ export default function SwapTypeformPage() {
         );
 
       case 'slippage':
-        return (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-            {currentQuestion.options?.map((option) => (
-              <button
-                key={option}
-                onClick={() => handleInputChange(parseFloat(option.replace('%', '')))}
-                className={`
-                  p-3 rounded-lg border-2 transition-all duration-300
-                  ${swapForm.slippage === parseFloat(option.replace('%', ''))
-                    ? 'border-white/50 bg-white/10 text-white'
-                    : 'border-white/20 bg-white/5 text-white/70 hover:border-white/30 hover:bg-white/10'
-                  }
-                `}
-              >
-                <div className="text-lg font-bold">{option}</div>
-              </button>
-            ))}
-          </div>
-        );
+        return null; // Slippage step removed
 
       case 'wallet':
         return (
@@ -258,11 +313,43 @@ export default function SwapTypeformPage() {
               </div>
               <div className="flex justify-between items-center mb-3">
                 <span className="text-white/70 text-sm">To:</span>
-                <span className="text-white font-mono text-sm">~{parseFloat(swapForm.fromAmount || '0') * 0.85} XLM</span>
+                <span className="text-white font-mono text-sm">
+                  {conversionRate.loading ? 'Loading...' : conversionRate.toAmount ? `${conversionRate.toAmount} XLM` : '~0 XLM'}
+                </span>
               </div>
+              {conversionRate.rate && (
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-white/70 text-sm">Rate:</span>
+                  <span className="text-white font-mono text-sm">1 ETH = {conversionRate.rate} XLM</span>
+                </div>
+              )}
+              {conversionRate.ethPriceUSD && (
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-white/70 text-sm">ETH Price:</span>
+                  <span className="text-white font-mono text-sm">${conversionRate.ethPriceUSD}</span>
+                </div>
+              )}
+              {conversionRate.xlmPriceUSD && (
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-white/70 text-sm">XLM Price:</span>
+                  <span className="text-white font-mono text-sm">${conversionRate.xlmPriceUSD}</span>
+                </div>
+              )}
+              {conversionRate.gasEstimate && (
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-white/70 text-sm">Gas:</span>
+                  <span className="text-white font-mono text-sm">~{conversionRate.gasEstimate} ETH</span>
+                </div>
+              )}
+              {conversionRate.error && (
+                <div className="flex justify-between items-center mb-3">
+                  <span className="text-red-400 text-sm">Error:</span>
+                  <span className="text-red-300 font-mono text-xs">{conversionRate.error}</span>
+                </div>
+              )}
               <div className="flex justify-between items-center mb-3">
-                <span className="text-white/70 text-sm">Slippage:</span>
-                <span className="text-white font-mono text-sm">{swapForm.slippage}%</span>
+                <span className="text-white/70 text-sm">Network:</span>
+                <span className="text-white font-mono text-sm">Ethereum → Stellar</span>
               </div>
               <div className="flex justify-between items-center">
                 <span className="text-white/70 text-sm">Wallet:</span>

@@ -10,6 +10,8 @@
   },
   "dependencies": {
     "@creit.tech/stellar-wallets-kit": "^1.7.7",
+    "@soroban-react/contracts": "^9.3.0",
+    "@soroban-react/core": "^9.3.0",
     "@stellar/stellar-sdk": "^13.3.0",
     "@stellar/typescript-wallet-sdk": "^1.9.0",
     "@types/three": "^0.178.1",
@@ -19,6 +21,7 @@
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "soroban-client": "^1.0.1",
+    "stellar-sdk": "^13.3.0",
     "three": "^0.178.0"
   },
   "devDependencies": {
