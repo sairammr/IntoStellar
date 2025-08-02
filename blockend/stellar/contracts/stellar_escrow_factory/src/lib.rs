@@ -3,8 +3,9 @@
 #![no_std]
 
 use soroban_sdk::{
-    contract, contractimpl, contracttype, contracterror, Address, BytesN, Env, String, Bytes,
+    contract, contractimpl, contracttype, contracterror, Address, Bytes, BytesN, Env, String,
 };
+use soroban_sdk::token;
 
 // We'll manually define the types we need from fusion_plus_escrow
 // This avoids the external crate dependency issue
@@ -229,6 +230,9 @@ impl StellarEscrowFactory {
 
         // Deploy escrow instance
         let _escrow_address = Self::deploy_escrow_instance(&env, hashlock.clone())?;
+
+        // CRITICAL: Verify maker has sufficient balance before escrow creation
+        Self::verify_maker_balance(&env, &order.maker_asset, &order.maker, making_amount as i128)?;
 
         // Verify escrow has sufficient balance
         // Note: In Stellar, we can't directly check token balances from the factory
@@ -461,62 +465,46 @@ impl StellarEscrowFactory {
     /// Parse extra data to extract ExtraDataArgs
     /// This is a simplified parser - in production, you'd need more robust parsing
     fn parse_extra_data(env: &Env, extra_data: &Bytes) -> Result<ExtraDataArgs, Error> {
-        // For now, we'll use a simplified approach
-        // In a real implementation, you'd need proper XDR deserialization
-        
-        if extra_data.len() < 200 { // Minimum expected size
-            return Err(Error::InvalidExtraData);
-        }
-
-        // Extract hashlock_info (first 32 bytes)
-        let mut hashlock_bytes = [0u8; 32];
-        for i in 0..32 {
-            hashlock_bytes[i] = extra_data.get(i as u32).unwrap_or(0);
-        }
-        let hashlock_info = BytesN::from_array(env, &hashlock_bytes);
-
-        // Extract dst_chain_id (next 8 bytes)
-        let mut chain_id_bytes = [0u8; 8];
-        for i in 0..8 {
-            chain_id_bytes[i] = extra_data.get((i + 32) as u32).unwrap_or(0);
-        }
-        let dst_chain_id = u64::from_be_bytes(chain_id_bytes);
-
-        // Extract dst_token (next 32 bytes as address)
-        let mut token_bytes = [0u8; 32];
-        for i in 0..32 {
-            token_bytes[i] = extra_data.get((i + 40) as u32).unwrap_or(0);
-        }
-        // Create a dummy address for now - in production, you'd properly parse this
-        let dst_token = Address::from_string(&String::from_str(env, "dummy_token_address"));
-
-        // Extract deposits (next 16 bytes)
-        let mut deposits_bytes = [0u8; 16];
-        for i in 0..16 {
-            deposits_bytes[i] = extra_data.get((i + 72) as u32).unwrap_or(0);
-        }
-        let deposits = u128::from_be_bytes(deposits_bytes);
-
-        // For timelocks, we'll use default values for now
-        // In a real implementation, you'd parse the remaining bytes
-        let timelocks = FactoryTimelockParams {
-            finality_delay: 100,
-            src_withdrawal_delay: 200,
-            src_public_withdrawal_delay: 300,
-            src_cancellation_delay: 400,
-            src_public_cancellation_delay: 500,
-            dst_withdrawal_delay: 600,
-            dst_public_withdrawal_delay: 700,
-            dst_cancellation_delay: 800,
-        };
-
+        // TODO: Implement proper parsing of extra_data
+        // For now, return placeholder values
         Ok(ExtraDataArgs {
-            hashlock_info,
-            dst_chain_id,
-            dst_token,
-            deposits,
-            timelocks,
+            hashlock_info: BytesN::from_array(env, &[0u8; 32]), // Placeholder
+            dst_chain_id: 1, // Placeholder
+            dst_token: Address::from_string(&String::from_str(env, "dummy_token")), // Placeholder
+            deposits: 0, // Placeholder
+            timelocks: FactoryTimelockParams {
+                finality_delay: 60,
+                src_withdrawal_delay: 120,
+                src_public_withdrawal_delay: 180,
+                src_cancellation_delay: 240,
+                src_public_cancellation_delay: 300,
+                dst_withdrawal_delay: 360,
+                dst_public_withdrawal_delay: 420,
+                dst_cancellation_delay: 480,
+            },
         })
+    }
+
+    fn verify_maker_balance(env: &Env, token: &Address, maker: &Address, amount: i128) -> Result<(), Error> {
+        // Check if token is native XLM
+        let is_native = *token == Address::from_string(&String::from_str(env, "native"));
+        
+        if is_native {
+            // For native XLM, check if maker has enough XLM
+            let native_client = token::Client::new(env, &Address::from_string(&String::from_str(env, "native")));
+            let maker_balance = native_client.balance(maker);
+            if maker_balance < amount {
+                return Err(Error::InsufficientEscrowBalance);
+            }
+        } else {
+            // For custom tokens, check if maker has enough tokens
+            let token_client = token::Client::new(env, token);
+            let maker_balance = token_client.balance(maker);
+            if maker_balance < amount {
+                return Err(Error::InsufficientEscrowBalance);
+            }
+        }
+        Ok(())
     }
 }
 
