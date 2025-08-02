@@ -8,6 +8,8 @@ const { Server } = StellarSdk;
 import { Logger } from "../utils/Logger";
 import { Config } from "../config/Config";
 import { RelayerService, EscrowCreatedEvent } from "../services/RelayerService";
+import { StellarProvider } from "../services/StellarProvider";
+import { XDRDecoder, DecodedContractEvent } from "../utils/XDRDecoder";
 
 export interface StellarEventMonitorConfig {
   horizonUrl: string;
@@ -24,14 +26,16 @@ export class StellarEventMonitor {
   private logger = Logger.getInstance();
   private config = Config.getInstance();
   private relayerService: RelayerService;
-  private server: typeof Server;
+  private stellarProvider: StellarProvider;
+  private xdrDecoder: XDRDecoder;
   private running = false;
   private lastProcessedLedger = 0;
   private eventStreamCloser?: () => void;
 
   constructor(relayerService: RelayerService) {
     this.relayerService = relayerService;
-    this.server = new Server(this.config.stellar.horizonUrl);
+    this.stellarProvider = new StellarProvider();
+    this.xdrDecoder = new XDRDecoder();
   }
 
   /**
@@ -42,13 +46,7 @@ export class StellarEventMonitor {
 
     try {
       // Get current ledger number
-      const latestLedger = await this.server
-        .ledgers()
-        .order("desc")
-        .limit(1)
-        .call();
-
-      const currentLedger = parseInt(latestLedger.records[0].sequence);
+      const currentLedger = await this.stellarProvider.getCurrentLedger();
       this.lastProcessedLedger = Math.max(0, currentLedger - 10); // Start 10 ledgers back for safety
 
       this.logger.info("Stellar event monitor started", {
@@ -89,8 +87,10 @@ export class StellarEventMonitor {
    */
   private startEventMonitoring(): void {
     try {
+      const server = this.stellarProvider.getServer();
+
       // Monitor contract call operations for the escrow factory
-      this.eventStreamCloser = this.server
+      this.eventStreamCloser = server
         .operations()
         .forAccount(this.config.contracts.stellar.escrowFactory)
         .cursor("now")
@@ -121,13 +121,7 @@ export class StellarEventMonitor {
       if (!this.running) return;
 
       try {
-        const latestLedger = await this.server
-          .ledgers()
-          .order("desc")
-          .limit(1)
-          .call();
-
-        const currentLedger = parseInt(latestLedger.records[0].sequence);
+        const currentLedger = await this.stellarProvider.getCurrentLedger();
         const confirmedLedger = Math.max(0, currentLedger - 3); // Wait for 3 ledgers for finality
 
         if (confirmedLedger > this.lastProcessedLedger) {
@@ -177,7 +171,8 @@ export class StellarEventMonitor {
    */
   private async processLedger(ledgerSeq: number): Promise<void> {
     try {
-      const operations = await this.server
+      const server = this.stellarProvider.getServer();
+      const operations = await server
         .operations()
         .forLedger(ledgerSeq.toString())
         .limit(200)
@@ -240,10 +235,9 @@ export class StellarEventMonitor {
   ): Promise<void> {
     try {
       // Get the transaction details to access events
-      const transaction = await this.server
-        .transactions()
-        .transaction(operation.transaction_hash)
-        .call();
+      const transaction = await this.stellarProvider.getTransaction(
+        operation.transaction_hash
+      );
 
       // Parse contract events from the transaction
       await this.parseContractEvents(transaction, operation);
@@ -256,25 +250,23 @@ export class StellarEventMonitor {
    * Parse contract events from a transaction
    */
   private async parseContractEvents(
-    transaction: Horizon.ServerApi.TransactionRecord,
+    transaction: any,
     operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): Promise<void> {
     try {
-      // Note: This is a simplified implementation
-      // In practice, you'll need to decode the XDR data to extract contract events
-      // Stellar contract events are embedded in the transaction result XDR
+      // Get contract events from the transaction using XDR decoder
+      const events = await this.stellarProvider.getContractEvents(
+        transaction.hash
+      );
 
-      // For now, we'll use a simplified approach where we check the operation function name
-      // and extract parameters to determine if an escrow was created
+      // Process events
+      for (const event of events) {
+        await this.processContractEvent(event, transaction, operation);
+      }
 
-      const functionName = this.extractFunctionName(operation);
-
-      if (functionName === "create_escrow") {
-        await this.handleEscrowCreatedEvent(transaction, operation);
-      } else if (functionName === "withdraw") {
-        await this.handleWithdrawalEvent(transaction, operation);
-      } else if (functionName === "cancel") {
-        await this.handleCancellationEvent(transaction, operation);
+      // Fallback: try to infer from operation if no events found
+      if (events.length === 0) {
+        await this.processOperationFallback(transaction, operation);
       }
     } catch (error) {
       this.logger.error("Error parsing contract events:", error);
@@ -282,10 +274,68 @@ export class StellarEventMonitor {
   }
 
   /**
+   * Process a contract event
+   */
+  private async processContractEvent(
+    event: DecodedContractEvent,
+    transaction: any,
+    operation: any
+  ): Promise<void> {
+    try {
+      // Map event types to our handlers
+      switch (event.type) {
+        case "EscrowCreated":
+        case "escrow_created":
+          await this.handleEscrowCreatedEvent(transaction, operation, event);
+          break;
+        case "Withdrawal":
+        case "withdrawal":
+          await this.handleWithdrawalEvent(transaction, operation, event);
+          break;
+        case "Cancellation":
+        case "cancellation":
+          await this.handleCancellationEvent(transaction, operation, event);
+          break;
+        default:
+          this.logger.debug("Unknown contract event type", {
+            type: event.type,
+          });
+      }
+    } catch (error) {
+      this.logger.error("Error processing contract event:", error);
+    }
+  }
+
+  /**
+   * Fallback processing when no events are found
+   */
+  private async processOperationFallback(
+    transaction: any,
+    operation: any
+  ): Promise<void> {
+    try {
+      const functionName = this.extractFunctionName(operation);
+
+      if (
+        functionName === "create_src_escrow" ||
+        functionName === "create_dst_escrow"
+      ) {
+        await this.handleEscrowCreatedEvent(transaction, operation);
+      } else if (functionName === "withdraw") {
+        await this.handleWithdrawalEvent(transaction, operation);
+      } else if (functionName === "cancel") {
+        await this.handleCancellationEvent(transaction, operation);
+      }
+    } catch (error) {
+      this.logger.error("Error in operation fallback processing:", error);
+    }
+  }
+
+  /**
    * Extract function name from contract invocation
    */
   private extractFunctionName(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
   ): string {
     // This is a placeholder implementation
     // In practice, you'd decode the XDR to get the actual function name
@@ -300,23 +350,24 @@ export class StellarEventMonitor {
    * Handle escrow created event
    */
   private async handleEscrowCreatedEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    transaction: any,
+    operation: any,
+    event?: any
   ): Promise<void> {
     try {
-      // Extract escrow parameters from the operation
+      // Extract escrow parameters from the operation or event
       // This is a simplified implementation - you'd need to decode XDR properly
 
       // TODO: Properly decode Stellar event XDR to extract complete timelock information
       // For now, using placeholder values - this needs proper XDR decoding implementation
       const escrowEvent: EscrowCreatedEvent = {
-        hashLock: this.extractHashLock(operation),
-        orderHash: "0x" + "0".repeat(64), // TODO: Extract from XDR
-        maker: operation.source_account,
-        taker: this.extractResolver(operation),
-        token: this.extractToken(operation),
-        amount: this.extractAmount(operation),
-        safetyDeposit: this.extractSafetyDeposit(operation),
+        hashLock: this.extractHashLock(operation, event),
+        orderHash: this.extractOrderHash(operation, event),
+        maker: this.extractMaker(operation, event),
+        taker: this.extractTaker(operation, event),
+        token: this.extractToken(operation, event),
+        amount: this.extractAmount(operation, event),
+        safetyDeposit: this.extractSafetyDeposit(operation, event),
         timelocks: {
           // TODO: Extract actual timelock values from Stellar event XDR
           finality: 300, // 5 minutes
@@ -327,17 +378,17 @@ export class StellarEventMonitor {
           dstWithdrawal: 3600, // 1 hour
           dstPublicWithdrawal: 7200, // 2 hours
           dstCancellation: 28800, // 8 hours
-          deployedAt: new Date(transaction.created_at).getTime(),
+          deployedAt: new Date(transaction.createdAt).getTime(),
         },
         chain: "stellar",
         transactionHash: transaction.hash,
-        timestamp: new Date(transaction.created_at).getTime(),
+        timestamp: new Date(transaction.createdAt).getTime(),
       };
 
       this.logger.info("Detected Stellar escrow creation", {
         hashLock: escrowEvent.hashLock,
         transactionHash: transaction.hash,
-        ledger: transaction.ledger_attr,
+        ledger: transaction.ledger,
       });
 
       // Emit to relayer service
@@ -351,12 +402,13 @@ export class StellarEventMonitor {
    * Handle withdrawal event
    */
   private async handleWithdrawalEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    transaction: any,
+    operation: any,
+    event?: any
   ): Promise<void> {
     try {
-      const hashLock = this.extractHashLock(operation);
-      const secret = this.extractSecret(operation);
+      const hashLock = this.extractHashLock(operation, event);
+      const secret = this.extractSecret(operation, event);
 
       this.logger.info("Detected Stellar withdrawal", {
         hashLock,
@@ -378,11 +430,12 @@ export class StellarEventMonitor {
    * Handle cancellation event
    */
   private async handleCancellationEvent(
-    transaction: Horizon.ServerApi.TransactionRecord,
-    operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    transaction: any,
+    operation: any,
+    event?: any
   ): Promise<void> {
     try {
-      const hashLock = this.extractHashLock(operation);
+      const hashLock = this.extractHashLock(operation, event);
 
       this.logger.info("Detected Stellar cancellation", {
         hashLock,
@@ -399,46 +452,63 @@ export class StellarEventMonitor {
     }
   }
 
-  // Placeholder extraction methods - implement proper XDR decoding
+  // Enhanced extraction methods with event support
   private extractHashLock(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    operation: any,
+    event?: DecodedContractEvent
   ): string {
+    // Try to extract from event first, then fallback to operation
+    if (event?.data?.hashLock) return event.data.hashLock;
+    if (event?.data?.hash_lock) return event.data.hash_lock;
+
     // Implement proper parameter extraction from XDR
     return "0x" + "0".repeat(64); // Placeholder
   }
 
-  private extractResolver(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+  private extractOrderHash(
+    operation: any,
+    event?: DecodedContractEvent
   ): string {
-    // Implement proper parameter extraction from XDR
+    if (event?.data?.orderHash) return event.data.orderHash;
+    if (event?.data?.order_hash) return event.data.order_hash;
+    return "0x" + "0".repeat(64); // Placeholder
+  }
+
+  private extractMaker(operation: any, event?: DecodedContractEvent): string {
+    if (event?.data?.maker) return event.data.maker;
+    return (
+      operation.source_account ||
+      "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+    );
+  }
+
+  private extractTaker(operation: any, event?: DecodedContractEvent): string {
+    if (event?.data?.taker) return event.data.taker;
     return "GXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
   }
 
-  private extractToken(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
+  private extractToken(operation: any, event?: DecodedContractEvent): string {
+    if (event?.data?.token) return event.data.token;
     return "CXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"; // Placeholder
   }
 
-  private extractAmount(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
+  private extractAmount(operation: any, event?: DecodedContractEvent): string {
+    if (event?.data?.amount) return event.data.amount.toString();
     return "1000000"; // Placeholder
   }
 
   private extractSafetyDeposit(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
+    operation: any,
+    event?: DecodedContractEvent
   ): string {
-    // Implement proper parameter extraction from XDR
+    if (event?.data?.safetyDeposit) return event.data.safetyDeposit.toString();
+    if (event?.data?.safety_deposit)
+      return event.data.safety_deposit.toString();
     return "100000"; // Placeholder
   }
 
-  private extractSecret(
-    _operation: Horizon.HorizonApi.InvokeHostFunctionOperationResponse
-  ): string {
-    // Implement proper parameter extraction from XDR
+  private extractSecret(operation: any, event?: DecodedContractEvent): string {
+    if (event?.data?.secret) return event.data.secret;
     return "0x" + "0".repeat(64); // Placeholder
   }
 
@@ -449,11 +519,13 @@ export class StellarEventMonitor {
     running: boolean;
     lastProcessedLedger: number;
     horizonUrl: string;
+    providerConnected: boolean;
   } {
     return {
       running: this.running,
       lastProcessedLedger: this.lastProcessedLedger,
       horizonUrl: this.config.stellar.horizonUrl,
+      providerConnected: this.stellarProvider?.isConnected() || false,
     };
   }
 }

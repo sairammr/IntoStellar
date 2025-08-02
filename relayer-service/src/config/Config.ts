@@ -17,6 +17,7 @@ export interface StellarConfig {
   networkPassphrase: string;
   privateKey: string;
   accountId: string;
+  allowHttp?: boolean;
 }
 
 export interface ContractConfig {
@@ -26,6 +27,8 @@ export interface ContractConfig {
   };
   stellar: {
     escrowFactory: string;
+    limitOrderProtocol: string;
+    resolver: string;
   };
 }
 
@@ -157,6 +160,8 @@ export class Config {
         },
         stellar: {
           escrowFactory: this.getEnvVar("STELLAR_ESCROW_FACTORY"),
+          limitOrderProtocol: this.getEnvVar("STELLAR_LIMIT_ORDER_PROTOCOL"),
+          resolver: this.getEnvVar("STELLAR_RESOLVER"),
         },
       },
 
