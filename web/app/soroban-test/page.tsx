@@ -10,8 +10,11 @@ import {
   TransactionBuilder,
   Keypair,
   xdr,
+  contract,
+
 } from "@stellar/stellar-sdk";
 import { useStellarAccount } from "../hooks/useStellarAccount";
+import { ContractSpec } from "soroban-client";
 
 export default function SorobanTestPage() {
   const contractId = "CAU57EES7GKWLXDN7FETUMSQHOLBUQMXMSMIMNM6V32IVNMDUEV7MW6G";
@@ -73,8 +76,16 @@ export default function SorobanTestPage() {
     try {
       const server = new StellarRpc.Server("https://soroban-testnet.stellar.org");
       const account = await server.getAccount(accountAddress);
-
       const contract = new Contract(contractId);
+    const constractSpec = new ContractSpec([
+            "AAAAAAAAAAAAAAAFaGVsbG8AAAAAAAABAAAAAAAAAAJ0bwAAAAAAEAAAAAEAAAPqAAAAEA=="
+        ]);
+      const args = {to: 'value1'};
+      
+      
+      
+      const scArgs = constractSpec.funcArgsToScVals('hello', {to: 'value1'});
+      const resultScv = await contract.call('hello', xdr.ScVal.scvString("value1"));
 
       const tx = new TransactionBuilder(account, {
         fee: BASE_FEE,
