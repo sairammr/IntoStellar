@@ -58,7 +58,9 @@ pub struct Timelocks {
 }
 
 // Use I256 to handle 256-bit values like EVM uint256
-type TakerTraits = I256;
+#[derive(Clone, Debug)]
+#[contracttype]
+pub struct TakerTraits(pub I256);
 
 // Factory timelock parameters (matching StellarEscrowFactory)
 #[derive(Clone, Debug)]
@@ -142,7 +144,7 @@ impl StellarResolver {
         // CRITICAL: This sets bit 251 to indicate args contains target address
         // Since I256 doesn't support arithmetic ops, we use a workaround
         // For now, we'll use the original taker_traits and handle this in the LOP
-        let taker_traits_with_target = taker_traits;
+        let taker_traits_with_target = taker_traits.clone();
 
         // Prepare args with target (equivalent to EVM abi.encodePacked(computed, args))
         let args_with_target = Self::prepare_args_with_target(env, &escrow_address, &args)?;
@@ -154,7 +156,7 @@ impl StellarResolver {
             &order,
             &signature,
             &amount,
-            &taker_traits_with_target,
+            &taker_traits_with_target.0,
             &args_with_target,
         )?;
 
@@ -301,7 +303,7 @@ impl StellarResolver {
         order: &Order,
         signature: &Bytes,
         amount: &u128,
-        taker_traits: &TakerTraits,
+        taker_traits: &I256,
         args: &Bytes,
     ) -> Result<(), Error> {
         // Convert Resolver Order to LOP ResolverOrder

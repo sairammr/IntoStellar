@@ -1,0 +1,39 @@
+{
+  "name": "eth-stellar-swap-tests",
+  "version": "1.0.0",
+  "description": "Automated tests for ETH-Stellar cross-chain atomic swaps",
+  "main": "index.js",
+  "scripts": {
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "test:eth-stellar": "jest eth-stellar-swap.spec.ts",
+    "test:deployment": "jest --testNamePattern='Contract Deployment'",
+    "test:swap-flow": "jest --testNamePattern='Cross-Chain Atomic Swap Flow'",
+    "test:error-handling": "jest --testNamePattern='Error Handling'",
+    "test:performance": "jest --testNamePattern='Performance'",
+    "setup": "node setup-test-env.js"
+  },
+  "dependencies": {
+    "ethers": "^6.8.1",
+    "dotenv": "^16.3.1",
+    "@stellar/stellar-sdk": "^11.0.0",
+    "jest": "^29.7.0",
+    "ts-jest": "^29.1.1",
+    "typescript": "^5.2.2",
+    "@types/node": "^20.8.0"
+  },
+  "devDependencies": {
+    "@jest/globals": "^29.7.0"
+  },
+  "keywords": [
+    "ethereum",
+    "stellar",
+    "cross-chain",
+    "atomic-swap",
+    "testing",
+    "blockchain"
+  ],
+  "author": "IntoStellar Team",
+  "license": "MIT"
+}
