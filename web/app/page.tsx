@@ -20,11 +20,11 @@ export default function Home() {
       <div className="relative z-10 flex items-end justify-center min-h-screen pb-20">
                      {/* Bottom Button */}
              <div className="text-center">
-               <Link href="/wallet">
+               <Link href="/swap-typeform">
                  <InterstellarButton className="px-16">
                    ENTER
                  </InterstellarButton>
-               </Link>
+               </Link>  
              </div>
       </div>
       

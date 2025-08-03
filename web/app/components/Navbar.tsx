@@ -33,38 +33,23 @@ export default function Navbar() {
 
         {/* Navigation Links */}
         <div className="hidden md:flex items-center space-x-8">
-          <Link
-            href="/wallet"
-            className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
-          >
-            WALLET
-          </Link>
+          
           <Link
             href="/swap-typeform"
             className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
           >
             SWAP
           </Link>
+          
+         
           <Link
-            href="/testing"
+            href="/starter-pack"
             className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
           >
-            TESTING
+            STARTER PACK
           </Link>
           <Link
-            href="/test-stellar"
-            className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
-          >
-            STELLAR TEST
-          </Link>
-          <Link
-            href="/about"
-            className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
-          >
-            ABOUT
-          </Link>
-          <Link
-            href="/docs"
+            href="https://github.com/sairammr/intostellar"
             className="text-white/80 hover:text-white transition-colors duration-300 text-sm tracking-wide font-mono"
           >
             DOCS
