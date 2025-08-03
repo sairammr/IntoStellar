@@ -1,431 +1,23 @@
 "use client";
-import React, { useState } from "react";
-import { stellarContract } from "../lib/stellar-contract";
-import { connect, disconnect, getPublicKey, kit } from "../lib/stellar-wallets-kit";
-import * as Client from "../packages/create_escrow/dist";
-import * as xdr from "@stellar/stellar-base";
-import Server from "@stellar/stellar-sdk";
-import freighterApi, { signAuthEntry, signTransaction } from "@stellar/freighter-api";
+import React from "react";
+import { useEscrowContract } from "../hooks/useEscrowContract";
 
 export default function EscrowTestPage() {
-  const [result, setResult] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [testType, setTestType] = useState<string>("");
-  const [walletAddress, setWalletAddress] = useState<string>("");
-  const [isConnected, setIsConnected] = useState<boolean>(false);
-
-  // Check if wallet is already connected on page load
-  React.useEffect(() => {
-    const checkWalletConnection = async () => {
-      try {
-        const address = await getPublicKey();
-        if (address) {
-          setWalletAddress(address);
-          setIsConnected(true);
-          stellarContract.setPublicKey(address);
-        }
-      } catch (error) {
-        console.log("No wallet connected");
-      }
-    };
-
-    checkWalletConnection();
-  }, []);
-
-  const connectWallet = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("connect_wallet");
-
-    try {
-      await connect(async () => {
-        const address = await getPublicKey();
-        if (address) {
-          stellarContract.setPublicKey(address);
-          setWalletAddress(address);
-          setIsConnected(true);
-          
-          const response = await stellarContract.testConnection();
-          setResult(response);
-        } else {
-          throw new Error("Failed to get wallet address");
-        }
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const disconnectWallet = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("disconnect_wallet");
-
-    try {
-      await disconnect(async () => {
-        setWalletAddress("");
-        setIsConnected(false);
-        setResult({ success: true, message: "Wallet disconnected successfully" });
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const testCreateSrcEscrow = async () => {
-    if (!isConnected || !walletAddress) {
-      setError("Please connect your wallet first");
-      return;
-    }
-    
-    setLoading(true);
-    setError(null);
-    setResult(null);
-
-
-    try {
-      // Mock parameters for testing
-      const params = {
-        orderHash: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-        hashLock: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-        maker: walletAddress,
-        taker: walletAddress,
-        token: walletAddress,
-        amount: "1000000000",
-        safetyDeposit: "100000000",
-        timelocks: {
-          finalityDelay: 3600,
-          srcWithdrawalDelay: 7200,
-          srcPublicWithdrawalDelay: 14400,
-          srcCancellationDelay: 10800,
-          srcPublicCancellationDelay: 18000,
-          dstWithdrawalDelay: 7200,
-          dstPublicWithdrawalDelay: 14400,
-          dstCancellationDelay: 10800
-        }
-      };
-
-      const contract = new Client.Client({
-        ...Client.networks.testnet,
-        rpcUrl: "https://soroban-testnet.stellar.org",
-        signTransaction: async (tx: string) => {
-          const { address } = await kit.getAddress();
-          const { signedTxXdr } = await kit.signTransaction(tx, {
-            address,
-            networkPassphrase: 'Test SDF Network ; September 2015'
-          });
-          return { signedTxXdr, signerAddress: address };
-        },
-      });
-      
-      // Create 32-byte buffers for order_hash and hash_lock
-      const orderHashBuffer = Buffer.alloc(32);
-      const hashLockBuffer = Buffer.alloc(32);
-      // Use a random 32-bit integer for uniqueness
-      const uniqueId = Math.floor(Math.random() * 0xffffffff);
-      orderHashBuffer.fill(1);
-      orderHashBuffer.writeUInt32LE(uniqueId, 0);
-      hashLockBuffer.fill(2);
-      hashLockBuffer.writeUInt32LE(uniqueId, 0);
-      // Use the connected wallet address for maker and taker
-      const makerAddress = walletAddress;
-      const takerAddress = walletAddress;
-      // Use CLI-style timelocks for testing
-      const timelocks = {
-        finality_delay: 10,
-        src_withdrawal_delay: 20,
-        src_public_withdrawal_delay: 30,
-        src_cancellation_delay: 40,
-        src_public_cancellation_delay: 50,
-        dst_withdrawal_delay: 60,
-        dst_public_withdrawal_delay: 70,
-        dst_cancellation_delay: 80,
-      };
-      const response = await contract.create_src_escrow({
-
-        order_hash: orderHashBuffer,
-        hash_lock: hashLockBuffer,
-        maker: makerAddress,
-        taker: takerAddress,
-        token: walletAddress,
-        amount: BigInt(params.amount),
-        safety_deposit: BigInt(params.safetyDeposit),
-        timelocks,
-      });
-      
-      // Log the full response for debugging
-      console.log("Contract Response:", response);
-
-// Now sign with Freighter
-// const signedXDR = await FreighterApi.signTransaction(response.toXDR(), {
-//     networkPassphrase: 'Test SDF Network ; September 2015'
-// }); 
-      // Check if additional signatu
-      // res are needed
-      // console.log("Signed XDR:", signedXDR);
-      
-      const whoElseNeedsToSign = response.needsNonInvokerSigningBy();
-      console.log("Who else needs to sign:", whoElseNeedsToSign);
-      
-      // If additional signatures are needed, sign them
-      if (whoElseNeedsToSign && whoElseNeedsToSign.length > 0) {
-        console.log("Signing auth entries for address:", whoElseNeedsToSign[0]);
-        try {
-          await response.signAuthEntries({
-            address: whoElseNeedsToSign[0],
-            signAuthEntry: async (preimageXDR: string, options?: { networkPassphrase?: string; address?: string }) => {
-              console.log("Signing auth entry preimage:", preimageXDR);
-              
-              try {
-                const signedResult = await signAuthEntry(preimageXDR, {
-                  networkPassphrase: 'Test SDF Network ; September 2015'
-                });
-                
-                console.log("Signed result:", signedResult);
-                
-                // The signedAuthEntry is a serialized Buffer object: {type: 'Buffer', data: Array}
-                // We need to reconstruct the Buffer and convert it to base64
-                let signedAuthEntryBase64: string;
-                
-                
-                  const buffer = Buffer.from(signedResult?.signedAuthEntry?.data);
-                  signedAuthEntryBase64 = buffer.toString('base64');
-                  
-                  console.log("Reconstructed buffer:", buffer);
-                  console.log("Buffer as base64:", signedAuthEntryBase64);
-                
-                return {
-                  signedAuthEntry: signedAuthEntryBase64,
-                  signerAddress: whoElseNeedsToSign[0]
-                };
-              } catch (error) {
-                console.error("Error signing auth entry:", error);
-                throw error;
-              }
-            }
-              });
-            const signedTx = await response.signAndSend({
-
-              signTransaction: async (tx: string) => {
-                
-                const signedTx = await freighterApi.signTransaction(tx, {
-                  address: walletAddress,
-                  networkPassphrase: 'Test SDF Network ; September 2015'
-                })
-                console.log("Signed Tx:", signedTx);
-                return { 
-                  signedTxXdr: signedTx?.signedTxXdr || "", 
-                  signerAddress: walletAddress // Use the main wallet address
-                };
-              }}
-             
-            )
-
-
-          console.log("Submitted Transaction:",signedTx );
-
-        } catch (signError) {
-          console.error("Error:", signError); 
-        }
-      } else {
-        console.log("No additional signatures needed");
-      }
-
-      
-      setResult({
-        response,
-
-        message: "Escrow created and submitted successfully! Check the console for transaction details."
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-
-  const testCreateDstEscrow = async () => {
-    if (!isConnected || !walletAddress) {
-      setError("Please connect your wallet first");
-      return;
-    }
-    
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("create_dst_escrow");
-
-    try {
-      // Mock parameters for testing
-      const params = {
-        orderHash: "1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",
-        hashLock: "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
-        maker: "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
-        taker: "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
-        token: "GCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
-        amount: "1000000000", // 10 XLM in stroops
-        safetyDeposit: "100000000", // 1 XLM in stroops
-        timelocks: {
-          finalityDelay: 3600,
-          srcWithdrawalDelay: 7200,
-          srcPublicWithdrawalDelay: 14400,
-          srcCancellationDelay: 10800,
-          srcPublicCancellationDelay: 18000,
-          dstWithdrawalDelay: 7200,
-          dstPublicWithdrawalDelay: 14400,
-          dstCancellationDelay: 10800
-        }
-      };
-
-      const contract = new Client.Client({
-        ...Client.networks.testnet,
-        rpcUrl: "https://soroban-testnet.stellar.org",
-        signTransaction: async (tx: string) => {
-          const { address } = await kit.getAddress();
-          const { signedTxXdr } = await kit.signTransaction(tx, {
-            address,
-            networkPassphrase: 'Test SDF Network ; September 2015'
-          });
-          return { signedTxXdr, signerAddress: address };
-        },
-      });
-      
-      // Create 32-byte buffers for order_hash and hash_lock
-      const orderHashBuffer = Buffer.alloc(32);
-      const hashLockBuffer = Buffer.alloc(32);
-      // Use a random 32-bit integer for uniqueness
-      const uniqueId = Math.floor(Math.random() * 0xffffffff);
-      orderHashBuffer.fill(1);
-      orderHashBuffer.writeUInt32LE(uniqueId, 0);
-      hashLockBuffer.fill(2);
-      hashLockBuffer.writeUInt32LE(uniqueId, 0);
-      // Use the connected wallet address for maker and taker
-      const makerAddress = walletAddress;
-      const takerAddress = walletAddress;
-      // Use CLI-style timelocks for testing
-      const timelocks = {
-        finality_delay: 10,
-        src_withdrawal_delay: 20,
-        src_public_withdrawal_delay: 30,
-        src_cancellation_delay: 40,
-        src_public_cancellation_delay: 50,
-        dst_withdrawal_delay: 60,
-        dst_public_withdrawal_delay: 70,
-        dst_cancellation_delay: 80,
-      };
-      const response = await contract.create_dst_escrow({
-        order_hash: orderHashBuffer,
-        hash_lock: hashLockBuffer,
-        maker: makerAddress,
-        taker: takerAddress,
-        token: walletAddress,
-        amount: BigInt(params.amount),
-        safety_deposit: BigInt(params.safetyDeposit),
-        timelocks,
-        caller: walletAddress,
-      });
-      
-      setResult(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const testGetEscrowAddress = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("get_escrow_address");
-
-    try {
-      const contract = new Client.Client({
-        ...Client.networks.testnet,
-        rpcUrl: "https://soroban-testnet.stellar.org",
-        signTransaction: async (tx: string) => {
-          const { address } = await kit.getAddress();
-          const { signedTxXdr } = await kit.signTransaction(tx, {
-            address,
-            networkPassphrase: 'Test SDF Network ; September 2015'
-          });
-          return { signedTxXdr, signerAddress: address };
-        },
-      });
-      
-      // Create 32-byte buffer for hash_lock
-      const hashLockBuffer = Buffer.alloc(32);
-      hashLockBuffer.fill(2); // Fill with 2s for testing
-      
-      const response = await contract.get_escrow_address({
-        hash_lock: hashLockBuffer
-      });
-      setResult(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const testEscrowExists = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("escrow_exists");
-
-    try {
-      const contract = new Client.Client({
-        ...Client.networks.testnet,
-        rpcUrl: "https://soroban-testnet.stellar.org",
-        signTransaction: async (tx: string) => {
-          const { address } = await kit.getAddress();
-          const { signedTxXdr } = await kit.signTransaction(tx, {
-            address,
-            networkPassphrase: 'Test SDF Network ; September 2015'
-          });
-          return { signedTxXdr, signerAddress: address };
-        },
-      });
-      
-      // Create 32-byte buffer for hash_lock
-      const hashLockBuffer = Buffer.alloc(32);
-      hashLockBuffer.fill(2); // Fill with 2s for testing
-      
-      const response = await contract.escrow_exists({
-        hash_lock: hashLockBuffer
-      });
-      setResult(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const testConnection = async () => {
-    setLoading(true);
-    setError(null);
-    setResult(null);
-    setTestType("test_connection");
-
-    try {
-      const response = await stellarContract.testConnection();
-      setResult(response);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Unknown error occurred");
-    } finally {
-      setLoading(false);
-    }
-  };
+  const {
+    result,
+    loading,
+    error,
+    testType,
+    walletAddress,
+    isConnected,
+    connectWallet,
+    disconnectWallet,
+    createSrcEscrow,
+    createDstEscrow,
+    getEscrowAddress,
+    escrowExists,
+    connection,
+  } = useEscrowContract();
 
   return (
     <div className="min-h-screen bg-gray-900 text-white p-8">
@@ -491,7 +83,7 @@ export default function EscrowTestPage() {
           
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             <button
-              onClick={testCreateSrcEscrow}
+              onClick={() => createSrcEscrow()}
               disabled={loading || !isConnected}
               className="px-4 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
             >
@@ -499,7 +91,7 @@ export default function EscrowTestPage() {
             </button>
 
             <button
-              onClick={testCreateDstEscrow}
+              onClick={() => createDstEscrow()}
               disabled={loading || !isConnected}
               className="px-4 py-3 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
             >
@@ -507,7 +99,7 @@ export default function EscrowTestPage() {
             </button>
 
             <button
-              onClick={testGetEscrowAddress}
+              onClick={() => getEscrowAddress()}
               disabled={loading || !isConnected}
               className="px-4 py-3 bg-orange-600 hover:bg-orange-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
             >
@@ -515,7 +107,7 @@ export default function EscrowTestPage() {
             </button>
 
             <button
-              onClick={testEscrowExists}
+              onClick={() => escrowExists()}
               disabled={loading || !isConnected}
               className="px-4 py-3 bg-yellow-600 hover:bg-yellow-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
             >
@@ -523,7 +115,7 @@ export default function EscrowTestPage() {
             </button>
 
             <button
-              onClick={testConnection}
+              onClick={() => connection()}
               disabled={loading || !isConnected}
               className="px-4 py-3 bg-red-600 hover:bg-red-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-lg font-semibold transition-colors"
             >
